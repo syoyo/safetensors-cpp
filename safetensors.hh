@@ -1,20 +1,95 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2023 - Present, Syoyo Fujita.
+// Inspired from:
+// https://gist.github.com/Narsil/5d6bf307995158ad2c4994f323967284
 #pragma once
 
 #include <string>
+#include <unordered_map>
+#include <vector>
+
+#ifdef __ANDROID__
+#ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
+#include <android/asset_manager.h>
+#endif
+
+#ifdef SAFETENSORS_CPP_IMPLEMENTATION
+AAssetManager *asset_manager = nullptr;
+#else
+extern AAssetManager *asset_manager;
+#endif
+#endif
 
 namespace safetensors {
 
+enum dtype {
+  kBOOL,
+  kUINT8,
+  kINT8,
+  kINT16,
+  kUINT16,
+  kFLOAT16,
+  kBFLOAT16,
+  kINT32,
+  kUINT32,
+  kFLOAT32,
+  kFLOAT64,
+  kINT64,
+  kUINT64,
+};
+
+struct metadata_t {
+  dtype dtype;
+  std::vector<size_t> shape;
+  std::pair<size_t, size_t> data_offsets;
+};
+
+struct safetensors_t {
+  std::unordered_map<std::string, const metadata_t> metas;
+  std::vector<uint8_t> stoage;  // empty when mmap'ed
+
+  const uint8_t *mmap_addr{nullptr};
+  size_t mmap_size{0};
+
+  bool mmapped{false};
+};
+
+//
+// Load safetensors data from file or memory.
+// Tensor data is copied.
+//
 // filename: Assume UTF-8 string filepath
-bool load_from_file(const std::string &filename);
-bool load_from_memory(const char *bytes, const size_t nbytes);
+bool load_from_file(const std::string &filename, safetensors_t *st,
+                    std::string *err);
+bool load_from_memory(const char *bytes, const size_t nbytes, safetensors_t *st,
+                      std::string *err);
 
+//
+// Load safetensors with memory mapping.
+// Tensor data is not copied, thus the app must hold file or memory until
+// safetensor_t is live.
+//
+bool mmap_from_file(const std::string &filename, safetensors_t *st,
+                    std::string *err);
+bool mmap_from_memory(const std::string &filename, safetensors_t *st,
+                      std::string *err);
 
-} // namespace safetensors
+//
+// Load safetensors from memory with memory mapping(i.e. zero-copy).
+//
+bool mmap_from_memory(const std::string &filename);
 
+}  // namespace safetensors
 
 #if defined(SAFETENSORS_CPP_IMPLEMENTATION)
+
+#include <cstring>
+#include <fstream>
+#include <memory>
+
+#if !defined(MINIJSON_IMPLEMENTATION)
+#define MINIJSON_IMPLEMENTATION
+#endif
 
 // minijson: https://github.com/syoyo/minijson
 
@@ -24,12 +99,12 @@ bool load_from_memory(const char *bytes, const size_t nbytes);
 #ifndef minijson_h
 #define minijson_h
 
-#include <string>
 #include <map>
-#include <vector>
 #include <sstream>
+#include <string>
+#include <vector>
 
-//#define __MINIJSON_LIBERAL
+// #define __MINIJSON_LIBERAL
 
 // We recommended to use simdjson from_chars.
 // Using strtod() is a fallback
@@ -41,13 +116,13 @@ bool load_from_memory(const char *bytes, const size_t nbytes);
 namespace simdjson {
 namespace internal {
 
-double from_chars(const char *first) noexcept;
-double from_chars(const char *first, const char *end) noexcept;
+double from_chars(const char* first) noexcept;
+double from_chars(const char* first, const char* end) noexcept;
 
-char *to_chars(char *first, const char *last, double value);
+char* to_chars(char* first, const char* last, double value);
 
-} // internal
-} // simdjson
+}  // namespace internal
+}  // namespace simdjson
 
 #endif
 
@@ -58,7 +133,7 @@ namespace detail {
 double from_chars(const char *p);
 const char *my_strchr(const char *p, int ch);
 
-}
+}  // namespace detail
 
 typedef enum {
   unknown_type,
@@ -86,77 +161,81 @@ typedef double number;
 typedef std::string string;
 typedef std::map<string, value> object;
 typedef std::vector<value> array;
-typedef struct {} null_t;
+typedef struct {
+} null_t;
 
-//null_t null;
+// null_t null;
 
-template<typename T>
+template <typename T>
 struct TypeTraits;
 
-template<>
-struct TypeTraits<null_t>
-{
+template <>
+struct TypeTraits<null_t> {
   static constexpr uint32_t type_id() { return 0; }
 };
 
-template<>
-struct TypeTraits<boolean>
-{
+template <>
+struct TypeTraits<boolean> {
   static constexpr uint32_t type_id() { return 1; }
 };
 
-template<>
-struct TypeTraits<number>
-{
+template <>
+struct TypeTraits<number> {
   static constexpr uint32_t type_id() { return 2; }
 };
 
-template<>
-struct TypeTraits<string>
-{
+template <>
+struct TypeTraits<string> {
   static constexpr uint32_t type_id() { return 3; }
 };
 
-template<>
-struct TypeTraits<object>
-{
+template <>
+struct TypeTraits<object> {
   static constexpr uint32_t type_id() { return 4; }
 };
 
-template<>
-struct TypeTraits<array>
-{
+template <>
+struct TypeTraits<array> {
   static constexpr uint32_t type_id() { return 5; }
 };
 
 class value {
-private:
+ private:
   type t;
   union {
     null_t n;
     boolean b;
     number d;
-    string* s;
-    array* a;
-    object* o;
+    string *s;
+    array *a;
+    object *o;
   } u;
 
   void _free_u() {
-    if (t == string_type) { delete this->u.s; this->u.s = nullptr; }
-    if (t == array_type) { delete this->u.a; this->u.a = nullptr; }
-    if (t == object_type) { delete this->u.o; this->u.o = nullptr; }
+    if (t == string_type) {
+      delete this->u.s;
+      this->u.s = nullptr;
+    }
+    if (t == array_type) {
+      delete this->u.a;
+      this->u.a = nullptr;
+    }
+    if (t == object_type) {
+      delete this->u.o;
+      this->u.o = nullptr;
+    }
   }
 
-public:
+ public:
   value() : t(unknown_type), u() {}
   value(null_t n) : t(null_type), u() { u.n = n; }
   value(boolean b) : t(boolean_type), u() { u.b = b; }
   value(number d) : t(boolean_type), u() { u.d = d; }
-  value(const char* s) : t(string_type), u() { u.s = new string(s); }
-  value(const string& s) : t(string_type), u() { u.s = new string(s); }
-  value(const array& a) : t(array_type), u() { u.a = new array(a); }
-  value(const object& o) : t(object_type), u() { u.o = new object(o); }
-  value(const value& v) : t(v.t), u() {
+  value(const char *s) : t(string_type), u() { u.s = new string(s); }
+  value(const string &s) : t(string_type), u() { u.s = new string(s); }
+  value(const array &a) : t(array_type), u() { u.a = new array(a); }
+  value(const object &o) : t(object_type), u() { u.o = new object(o); }
+  value(const value &v) : t(v.t), u() {
     if (t == array_type) {
       u.a = new array();
       *u.a = *v.u.a;
@@ -169,68 +248,77 @@ public:
     } else
       u.d = v.u.d;
   }
-  ~value() {
-    _free_u();
-  }
+  ~value() { _free_u(); }
 
-  template<typename T>
+  template <typename T>
   bool is() const {
-    if (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id() && t == null_type) return true;
-    if (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id() && t == boolean_type) return true;
-    if (TypeTraits<T>::type_id() == TypeTraits<number>::type_id() && t == number_type) return true;
-    if (TypeTraits<T>::type_id() == TypeTraits<string>::type_id() && t == string_type) return true;
-    if (TypeTraits<T>::type_id() == TypeTraits<object>::type_id() && t == object_type) return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id() &&
+        t == null_type)
+      return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id() &&
+        t == boolean_type)
+      return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<number>::type_id() &&
+        t == number_type)
+      return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<string>::type_id() &&
+        t == string_type)
+      return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<object>::type_id() &&
+        t == object_type)
+      return true;
     return false;
   }
 
   // TODO: type-safe get.
-  template<typename T>
-  T& get() const {
-    if (t == array_type) return *reinterpret_cast<T*>(const_cast<array *>(u.a));
-    if (t == object_type) return *reinterpret_cast<T*>(u.o);
-    if (t == string_type) return *reinterpret_cast<T*>(u.s);
-    return *reinterpret_cast<T*>(const_cast<number *>(&u.d));
+  template <typename T>
+  T &get() const {
+    if (t == array_type)
+      return *reinterpret_cast<T *>(const_cast<array *>(u.a));
+    if (t == object_type) return *reinterpret_cast<T *>(u.o);
+    if (t == string_type) return *reinterpret_cast<T *>(u.s);
+    return *reinterpret_cast<T *>(const_cast<number *>(&u.d));
   }
-  null_t& operator=(null_t& n) {
+  null_t &operator=(null_t &n) {
     t = null_type;
     u.n = n;
     return u.n;
   }
-  boolean& operator=(boolean b) {
+  boolean &operator=(boolean b) {
     t = boolean_type;
     u.b = b;
     return u.b;
   }
-  number& operator=(number d) {
+  number &operator=(number d) {
     t = number_type;
     u.d = d;
     return u.d;
   }
-  const std::string& operator=(const char* s) {
+  const std::string &operator=(const char *s) {
     _free_u();
     t = string_type;
     u.s = new string(s);
     return *u.s;
   }
-  const string& operator=(const string& s) {
+  const string &operator=(const string &s) {
     _free_u();
     t = string_type;
     u.s = new string(s);
     return *u.s;
   }
-  const object& operator=(const object& o) {
+  const object &operator=(const object &o) {
     _free_u();
     t = object_type;
     u.o = new object(o);
     return *u.o;
   }
-  const array& operator=(const array& a) {
+  const array &operator=(const array &a) {
     _free_u();
     t = array_type;
     u.a = new array(a);
     return *u.a;
   }
-  const value& operator=(const value& v) {
+  const value &operator=(const value &v) {
     _free_u();
     t = v.t;
     if (t == array_type) {
@@ -239,18 +327,22 @@ public:
       u.o = new object(*v.u.o);
     } else if (t == string_type) {
       u.s = new string(*v.u.s);
-    } else u.d = v.u.d;
+    } else
+      u.d = v.u.d;
     return *this;
   }
-  std::string str(const char* p) const {
+  std::string str(const char *p) const {
     std::stringstream ss;
     ss << '"';
     while (*p) {
       if (*p == '\n') ss << "\\n";
       if (*p == '\r') ss << "\\r";
-      if (*p == '\t') ss << "\\t";
-      else if (detail::my_strchr("\"", *p)) ss << "\\" << *p;
-      else ss << *p;
+      if (*p == '\t')
+        ss << "\\t";
+      else if (detail::my_strchr("\"", *p))
+        ss << "\\" << *p;
+      else
+        ss << *p;
       p++;
     }
     ss << '"';
@@ -260,20 +352,15 @@ public:
     std::stringstream ss;
     if (t == unknown_type) {
       ss << "undefined";
-    } else
-    if (t == null_type) {
+    } else if (t == null_type) {
       ss << "null";
-    } else
-    if (t == boolean_type) {
+    } else if (t == boolean_type) {
       ss << (u.b ? "true" : "false");
-    } else
-    if (t == number_type) {
-      ss << double( u.d );
-    } else
-    if (t == string_type) {
+    } else if (t == number_type) {
+      ss << double(u.d);
+    } else if (t == string_type) {
       ss << str(u.s->c_str());
-    } else
-    if (t == array_type) {
+    } else if (t == array_type) {
       array::iterator i;
       ss << "[";
       array a = get<array>();
@@ -282,8 +369,7 @@ public:
         ss << i->str();
       }
       ss << "]";
-    } else
-    if (t == object_type) {
+    } else if (t == object_type) {
       object::iterator i;
       ss << "{";
       object o = get<object>();
@@ -298,34 +384,44 @@ public:
   }
 };
 
-#define MINIJSON_SKIP(i) while (*i && detail::my_strchr("\r\n \t", *i)) { i++; }
+#define MINIJSON_SKIP(i)                           \
+  while (*i && detail::my_strchr("\r\n \t", *i)) { \
+    i++;                                           \
+  }
 
-template<typename Iter>
-inline error
-parse_object(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_object(Iter &i, value &v) {
   object o;
   i++;
   MINIJSON_SKIP(i)
-  if (!(*i)) { return corrupted_json_error; }
+  if (!(*i)) {
+    return corrupted_json_error;
+  }
   if (*i != '\x7d') {
     while (*i) {
       value vk, vv;
       error e = parse_string(i, vk);
       if (e != no_error) return e;
       MINIJSON_SKIP(i)
-      if (!(*i)) { return corrupted_json_error; }
+      if (!(*i)) {
+        return corrupted_json_error;
+      }
       if (*i != ':') return invalid_token_error;
       i++;
       e = parse_any(i, vv);
       if (e != no_error) return e;
       o[vk.get<std::string>()] = vv;
       MINIJSON_SKIP(i)
-      if (!(*i)) { return corrupted_json_error; }
+      if (!(*i)) {
+        return corrupted_json_error;
+      }
       if (*i == '\x7d') break;
       if (*i != ',') return invalid_token_error;
       i++;
       MINIJSON_SKIP(i)
-      if (!(*i)) { return corrupted_json_error; }
+      if (!(*i)) {
+        return corrupted_json_error;
+      }
 #ifdef __MINIJSON_LIBERAL
       if (*i == '\x7d') break;
 #endif
@@ -336,13 +432,14 @@ parse_object(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_array(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_array(Iter &i, value &v) {
   array a;
   i++;
   MINIJSON_SKIP(i)
-  if (!(*i)) { return corrupted_json_error; }
+  if (!(*i)) {
+    return corrupted_json_error;
+  }
   if (*i != ']') {
     while (*i) {
       value va;
@@ -350,12 +447,16 @@ parse_array(Iter& i, value& v) {
       if (e != no_error) return e;
       a.push_back(va);
       MINIJSON_SKIP(i)
-      if (!(*i)) { return corrupted_json_error; }
+      if (!(*i)) {
+        return corrupted_json_error;
+      }
       if (*i == ']') break;
       if (*i != ',') return invalid_token_error;
       i++;
       MINIJSON_SKIP(i)
-      if (!(*i)) { return corrupted_json_error; }
+      if (!(*i)) {
+        return corrupted_json_error;
+      }
 #ifdef __MINIJSON_LIBERAL
       if (*i == '\x7d') break;
 #endif
@@ -366,11 +467,10 @@ parse_array(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_null(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_null(Iter &i, value &v) {
   Iter p = i;
-  if (*i == 'n' && *(i+1) == 'u' && *(i+2) == 'l' && *(i+3) == 'l') {
+  if (*i == 'n' && *(i + 1) == 'u' && *(i + 2) == 'l' && *(i + 3) == 'l') {
     i += 4;
     v = null_t();
   }
@@ -381,14 +481,14 @@ parse_null(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_boolean(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_boolean(Iter &i, value &v) {
   Iter p = i;
-  if (*i == 't' && *(i+1) == 'r' && *(i+2) == 'u' && *(i+3) == 'e') {
+  if (*i == 't' && *(i + 1) == 'r' && *(i + 2) == 'u' && *(i + 3) == 'e') {
     i += 4;
     v = static_cast<boolean>(true);
-  } else if (*i == 'f' && *(i+1) == 'a' && *(i+2) == 'l' && *(i+3) == 's' && *(i+4) == 'e') {
+  } else if (*i == 'f' && *(i + 1) == 'a' && *(i + 2) == 'l' &&
+             *(i + 3) == 's' && *(i + 4) == 'e') {
     i += 5;
     v = static_cast<boolean>(false);
   }
@@ -399,14 +499,14 @@ parse_boolean(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_number(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_number(Iter &i, value &v) {
   Iter p = i;
 
-#define MINIJSON_IS_NUM(x)  ('0' <= x && x <= '9')
-#define MINIJSON_IS_ALNUM(x)  (('0' <= x && x <= '9') || ('a' <= x && x <= 'f') || ('A' <= x && x <= 'F'))
-  if (*i == '0' && *(i + 1) == 'x' && MINIJSON_IS_ALNUM(*(i+2))) {
+#define MINIJSON_IS_NUM(x) ('0' <= x && x <= '9')
+#define MINIJSON_IS_ALNUM(x) \
+  (('0' <= x && x <= '9') || ('a' <= x && x <= 'f') || ('A' <= x && x <= 'F'))
+  if (*i == '0' && *(i + 1) == 'x' && MINIJSON_IS_ALNUM(*(i + 2))) {
     i += 3;
     while (MINIJSON_IS_ALNUM(*i)) i++;
     v = static_cast<number>(detail::from_chars(p));
@@ -437,9 +537,8 @@ parse_number(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_string(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_string(Iter &i, value &v) {
   if (*i != '"') return invalid_token_error;
 
   char t = *i++;
@@ -447,12 +546,16 @@ parse_string(Iter& i, value& v) {
   std::stringstream ss;
 
   while (*i && *i != t) {
-    if (*i == '\\' && *(i+1)) {
+    if (*i == '\\' && *(i + 1)) {
       i++;
-      if (*i == 'n') ss << "\n";
-      else if (*i == 'r') ss << "\r";
-      else if (*i == 't') ss << "\t";
-      else ss << *i;
+      if (*i == 'n')
+        ss << "\n";
+      else if (*i == 'r')
+        ss << "\r";
+      else if (*i == 't')
+        ss << "\t";
+      else
+        ss << *i;
     } else {
       ss << *i;
     }
@@ -462,7 +565,7 @@ parse_string(Iter& i, value& v) {
   if (i < p) {
     return corrupted_json_error;
   }
-  v = std::string(p, size_t(i-p));
+  v = std::string(p, size_t(i - p));
   i++;
   if (*i && nullptr == detail::my_strchr(":,\x7d]\r\n ", *i)) {
     i = p;
@@ -471,9 +574,8 @@ parse_string(Iter& i, value& v) {
   return no_error;
 }
 
-template<typename Iter>
-inline error
-parse_any(Iter& i, value& v) {
+template <typename Iter>
+inline error parse_any(Iter &i, value &v) {
   MINIJSON_SKIP(i)
   if (*i == '\x7b') return parse_object(i, v);
   if (*i == '[') return parse_array(i, v);
@@ -484,32 +586,47 @@ parse_any(Iter& i, value& v) {
   return invalid_token_error;
 }
 
-template<typename Iter>
-inline error
-parse(Iter& i, value& v) {
+template <typename Iter>
+inline error parse(Iter &i, value &v) {
   return parse_any(i, v);
 }
 
 #undef MINIJSON_SKIP
 
-inline const char*
-errstr(error e) {
+inline const char *errstr(error e) {
   const char *s = "unknown error";
   switch (e) {
-  case no_error: { s = "no error"; break; }
-  case undefined_error: { s = "undefined"; break; }
-  case invalid_token_error: { s = "invalid token"; break; }
-  case unknown_type_error: { s = "unknown type"; break; }
-  case memory_allocation_error: { s = "memory allocation error"; break; }
-  case corrupted_json_error: { s = "input is corrupted"; break; }
-  //default: return "unknown error";
+    case no_error: {
+      s = "no error";
+      break;
+    }
+    case undefined_error: {
+      s = "undefined";
+      break;
+    }
+    case invalid_token_error: {
+      s = "invalid token";
+      break;
+    }
+    case unknown_type_error: {
+      s = "unknown type";
+      break;
+    }
+    case memory_allocation_error: {
+      s = "memory allocation error";
+      break;
+    }
+    case corrupted_json_error: {
+      s = "input is corrupted";
+      break;
+    }
+      // default: return "unknown error";
   }
 
   return s;
-
 }
 
-} // namespace minijson
+}  // namespace minijson
 
 #if defined(MINIJSON_IMPLEMENTATION)
 
@@ -517,7 +634,6 @@ namespace minijson {
 namespace detail {
 
 double from_chars(const char *p) {
-
 #if defined(MINIJSON_USE_STRTOD)
   return strtod(p, nullptr);
 #else
@@ -526,30 +642,29 @@ double from_chars(const char *p) {
 }
 
 const char *my_strchr(const char *p, int ch) {
-	char c;
+  char c;
 
-  constexpr uint64_t kMaxCount = 1024ull * 1024ull; // up to 1M chars
+  constexpr uint64_t kMaxCount = 1024ull * 1024ull;  // up to 1M chars
 
   uint64_t cnt{0};
 
-	c = ch;
-	for (;; ++p, cnt++) {
+  c = ch;
+  for (;; ++p, cnt++) {
     if (cnt > kMaxCount) {
       return nullptr;
     }
 
-		if (*p == c) {
-			return (p);
+    if (*p == c) {
+      return (p);
     }
-		if (*p == '\0') {
-			return (nullptr);
+    if (*p == '\0') {
+      return (nullptr);
     }
-	}
+  }
 }
 
-} // detail
-} // minijson
-
+}  // namespace detail
+}  // namespace minijson
 
 #if !defined(MINIJSON_USE_STRTOD)
 
@@ -560,14 +675,14 @@ namespace simdjson {
 namespace internal {
 
 /**
- * The code in the internal::from_chars function is meant to handle the floating-point number parsing
- * when we have more than 19 digits in the decimal mantissa. This should only be seen
- * in adversarial scenarios: we do not expect production systems to even produce
- * such floating-point numbers.
+ * The code in the internal::from_chars function is meant to handle the
+ *floating-point number parsing when we have more than 19 digits in the decimal
+ *mantissa. This should only be seen in adversarial scenarios: we do not expect
+ *production systems to even produce such floating-point numbers.
  *
- * The parser is based on work by Nigel Tao (at https://github.com/google/wuffs/)
- * who credits Ken Thompson for the design (via a reference to the Go source
- * code). See
+ * The parser is based on work by Nigel Tao (at
+ *https://github.com/google/wuffs/) who credits Ken Thompson for the design (via
+ *a reference to the Go source code). See
  * https://github.com/google/wuffs/blob/aa46859ea40c72516deffa1b146121952d6dfd3b/internal/cgen/base/floatconv-submodule-data.c
  * https://github.com/google/wuffs/blob/46cd8105f47ca07ae2ba8e6a7818ef9c0df6c152/internal/cgen/base/floatconv-submodule-code.c
  * It is probably not very fast but it is a fallback that should almost never be
@@ -577,7 +692,7 @@ namespace internal {
 namespace {
 constexpr uint32_t max_digits = 768;
 constexpr int32_t decimal_point_range = 2047;
-} // namespace
+}  // namespace
 
 struct adjusted_mantissa {
   uint64_t mantissa;
@@ -593,27 +708,34 @@ struct decimal {
   uint8_t digits[max_digits];
 };
 
-template <typename T> struct binary_format {
+template <typename T>
+struct binary_format {
   static constexpr int mantissa_explicit_bits();
   static constexpr int minimum_exponent();
   static constexpr int infinite_power();
   static constexpr int sign_index();
 };
 
-template <> constexpr int binary_format<double>::mantissa_explicit_bits() {
+template <>
+constexpr int binary_format<double>::mantissa_explicit_bits() {
   return 52;
 }
 
-template <> constexpr int binary_format<double>::minimum_exponent() {
+template <>
+constexpr int binary_format<double>::minimum_exponent() {
   return -1023;
 }
-template <> constexpr int binary_format<double>::infinite_power() {
+template <>
+constexpr int binary_format<double>::infinite_power() {
   return 0x7FF;
 }
 
-template <> constexpr int binary_format<double>::sign_index() { return 63; }
+template <>
+constexpr int binary_format<double>::sign_index() {
+  return 63;
+}
 
-inline bool is_integer(char c)  noexcept  { return (c >= '0' && c <= '9'); }
+inline bool is_integer(char c) noexcept { return (c >= '0' && c <= '9'); }
 
 // This should always succeed since it follows a call to parse_number.
 static decimal parse_decimal(const char *&p) noexcept {
@@ -655,17 +777,19 @@ static decimal parse_decimal(const char *&p) noexcept {
     }
     answer.decimal_point = int32_t(first_after_period - p);
   }
-  if(answer.num_digits > 0) {
+  if (answer.num_digits > 0) {
     const char *preverse = p - 1;
     int32_t trailing_zeros = 0;
     while ((*preverse == '0') || (*preverse == '.')) {
-      if(*preverse == '0') { trailing_zeros++; }
+      if (*preverse == '0') {
+        trailing_zeros++;
+      }
       --preverse;
     }
     answer.decimal_point += int32_t(answer.num_digits);
     answer.num_digits -= uint32_t(trailing_zeros);
   }
-  if(answer.num_digits > max_digits ) {
+  if (answer.num_digits > max_digits) {
     answer.num_digits = max_digits;
     answer.truncated = true;
   }
@@ -678,7 +802,7 @@ static decimal parse_decimal(const char *&p) noexcept {
     } else if ('+' == *p) {
       ++p;
     }
-    int32_t exp_number = 0; // exponential part
+    int32_t exp_number = 0;  // exponential part
     while (is_integer(*p)) {
       uint8_t digit = uint8_t(*p - '0');
       if (exp_number < 0x10000) {
@@ -693,12 +817,14 @@ static decimal parse_decimal(const char *&p) noexcept {
 
 // This should always succeed since it follows a call to parse_number.
 // Will not read at or beyond the "end" pointer.
-static decimal parse_decimal(const char *&p, const char * end) noexcept {
+static decimal parse_decimal(const char *&p, const char *end) noexcept {
   decimal answer;
   answer.num_digits = 0;
   answer.decimal_point = 0;
   answer.truncated = false;
-  if(p == end) { return answer; } // should never happen
+  if (p == end) {
+    return answer;
+  }  // should never happen
   answer.negative = (*p == '-');
   if ((*p == '-') || (*p == '+')) {
     ++p;
@@ -716,7 +842,9 @@ static decimal parse_decimal(const char *&p, const char * end) noexcept {
   }
   if ((p != end) && (*p == '.')) {
     ++p;
-    if(p == end) { return answer; } // should never happen
+    if (p == end) {
+      return answer;
+    }  // should never happen
     const char *first_after_period = p;
     // if we have not yet encountered a zero, we have to skip it as well
     if (answer.num_digits == 0) {
@@ -734,23 +862,27 @@ static decimal parse_decimal(const char *&p, const char * end) noexcept {
     }
     answer.decimal_point = int32_t(first_after_period - p);
   }
-  if(answer.num_digits > 0) {
+  if (answer.num_digits > 0) {
     const char *preverse = p - 1;
     int32_t trailing_zeros = 0;
     while ((*preverse == '0') || (*preverse == '.')) {
-      if(*preverse == '0') { trailing_zeros++; }
+      if (*preverse == '0') {
+        trailing_zeros++;
+      }
       --preverse;
     }
     answer.decimal_point += int32_t(answer.num_digits);
     answer.num_digits -= uint32_t(trailing_zeros);
   }
-  if(answer.num_digits > max_digits ) {
+  if (answer.num_digits > max_digits) {
     answer.num_digits = max_digits;
     answer.truncated = true;
   }
   if ((p != end) && (('e' == *p) || ('E' == *p))) {
     ++p;
-    if(p == end) { return answer; } // should never happen
+    if (p == end) {
+      return answer;
+    }  // should never happen
     bool neg_exp = false;
     if ('-' == *p) {
       neg_exp = true;
@@ -758,7 +890,7 @@ static decimal parse_decimal(const char *&p, const char * end) noexcept {
     } else if ('+' == *p) {
       ++p;
     }
-    int32_t exp_number = 0; // exponential part
+    int32_t exp_number = 0;  // exponential part
     while ((p != end) && is_integer(*p)) {
       uint8_t digit = uint8_t(*p - '0');
       if (exp_number < 0x10000) {
@@ -875,7 +1007,7 @@ uint32_t number_of_digits_decimal_left_shift(decimal &h, uint32_t shift) {
   return num_new_digits;
 }
 
-} // end of anonymous namespace
+}  // end of anonymous namespace
 
 static uint64_t round(decimal &h) {
   if ((h.num_digits == 0) || (h.decimal_point < 0)) {
@@ -891,7 +1023,7 @@ static uint64_t round(decimal &h) {
   }
   bool round_up = false;
   if (dp < h.num_digits) {
-    round_up = h.digits[dp] >= 5; // normally, we round up
+    round_up = h.digits[dp] >= 5;  // normally, we round up
     // but we may need to round to even!
     if ((h.digits[dp] == 5) && (dp + 1 == h.num_digits)) {
       round_up = h.truncated || ((dp > 0) && (1 & h.digits[dp - 1]));
@@ -966,7 +1098,7 @@ static void decimal_right_shift(decimal &h, uint32_t shift) {
     }
   }
   h.decimal_point -= int32_t(read_index - 1);
-  if (h.decimal_point < -decimal_point_range) { // it is zero
+  if (h.decimal_point < -decimal_point_range) {  // it is zero
     h.num_digits = 0;
     h.decimal_point = 0;
     h.negative = false;
@@ -992,7 +1124,8 @@ static void decimal_right_shift(decimal &h, uint32_t shift) {
   trim(h);
 }
 
-template <typename binary> adjusted_mantissa compute_float(decimal &d) {
+template <typename binary>
+adjusted_mantissa compute_float(decimal &d) {
   adjusted_mantissa answer;
   if (d.num_digits == 0) {
     // should be zero
@@ -1007,14 +1140,14 @@ template <typename binary> adjusted_mantissa compute_float(decimal &d) {
   // which is fine, but log(10**299995)/log(2**60) ~= 16609 which is not
   // fine (runs for a long time).
   //
-  if(d.decimal_point < -324) {
+  if (d.decimal_point < -324) {
     // We have something smaller than 1e-324 which is always zero
     // in binary64 and binary32.
     // It should be zero.
     answer.power2 = 0;
     answer.mantissa = 0;
     return answer;
-  } else if(d.decimal_point >= 310) {
+  } else if (d.decimal_point >= 310) {
     // We have something at least as large as 0.1e310 which is
     // always infinite.
     answer.power2 = binary::infinite_power();
@@ -1025,8 +1158,8 @@ template <typename binary> adjusted_mantissa compute_float(decimal &d) {
   static const uint32_t max_shift = 60;
   static const uint32_t num_powers = 19;
   static const uint8_t powers[19] = {
-      0,  3,  6,  9,  13, 16, 19, 23, 26, 29, //
-      33, 36, 39, 43, 46, 49, 53, 56, 59,     //
+      0,  3,  6,  9,  13, 16, 19, 23, 26, 29,  //
+      33, 36, 39, 43, 46, 49, 53, 56, 59,      //
   };
   int32_t exp2 = 0;
   while (d.decimal_point > 0) {
@@ -1132,7 +1265,6 @@ double from_chars(const char *first) noexcept {
   return value;
 }
 
-
 double from_chars(const char *first, const char *end) noexcept {
   bool negative = first[0] == '-';
   if (negative) {
@@ -1149,8 +1281,8 @@ double from_chars(const char *first, const char *end) noexcept {
   return value;
 }
 
-} // internal
-} // simdjson
+}  // namespace internal
+}  // namespace simdjson
 
 namespace simdjson {
 namespace internal {
@@ -1181,9 +1313,9 @@ Target reinterpret_bits(const Source source) {
   return target;
 }
 
-struct diyfp // f * 2^e
+struct diyfp  // f * 2^e
 {
-  static constexpr int kPrecision = 64; // = q
+  static constexpr int kPrecision = 64;  // = q
 
   std::uint64_t f = 0;
   int e = 0;
@@ -1195,7 +1327,6 @@ struct diyfp // f * 2^e
   @pre x.e == y.e and x.f >= y.f
   */
   static diyfp sub(const diyfp &x, const diyfp &y) noexcept {
-
     return {x.f - y.f, x.e};
   }
 
@@ -1257,7 +1388,7 @@ struct diyfp // f * 2^e
     // Effectively we only need to add the highest bit in p_lo to p_hi (and
     // Q_hi + 1 does not overflow).
 
-    Q += std::uint64_t{1} << (64u - 32u - 1u); // round, ties up
+    Q += std::uint64_t{1} << (64u - 32u - 1u);  // round, ties up
 
     const std::uint64_t h = p3 + p2_hi + p1_hi + (Q >> 32u);
 
@@ -1269,7 +1400,6 @@ struct diyfp // f * 2^e
   @pre x.f != 0
   */
   static diyfp normalize(diyfp x) noexcept {
-
     while ((x.f >> 63u) == 0) {
       x.f <<= 1u;
       x.e--;
@@ -1301,8 +1431,8 @@ Compute the (normalized) diyfp representing the input number 'value' and its
 boundaries.
 @pre value must be finite and positive
 */
-template <typename FloatType> boundaries compute_boundaries(FloatType value) {
-
+template <typename FloatType>
+boundaries compute_boundaries(FloatType value) {
   // Convert the IEEE representation into a diyfp.
   //
   // If v is denormal:
@@ -1315,12 +1445,12 @@ template <typename FloatType> boundaries compute_boundaries(FloatType value) {
                 "floating-point implementation");
 
   constexpr int kPrecision =
-      std::numeric_limits<FloatType>::digits; // = p (includes the hidden bit)
+      std::numeric_limits<FloatType>::digits;  // = p (includes the hidden bit)
   constexpr int kBias =
       std::numeric_limits<FloatType>::max_exponent - 1 + (kPrecision - 1);
   constexpr int kMinExp = 1 - kBias;
   constexpr std::uint64_t kHiddenBit = std::uint64_t{1}
-                                       << (kPrecision - 1); // = 2^(p-1)
+                                       << (kPrecision - 1);  // = 2^(p-1)
 
   using bits_type = typename std::conditional<kPrecision == 24, std::uint32_t,
                                               std::uint64_t>::type;
@@ -1358,8 +1488,8 @@ template <typename FloatType> boundaries compute_boundaries(FloatType value) {
   const bool lower_boundary_is_closer = F == 0 && E > 1;
   const diyfp m_plus = diyfp(2 * v.f + 1, v.e - 1);
   const diyfp m_minus = lower_boundary_is_closer
-                            ? diyfp(4 * v.f - 1, v.e - 2)  // (B)
-                            : diyfp(2 * v.f - 1, v.e - 1); // (A)
+                            ? diyfp(4 * v.f - 1, v.e - 2)   // (B)
+                            : diyfp(2 * v.f - 1, v.e - 1);  // (A)
 
   // Determine the normalized w+ = m+.
   const diyfp w_plus = diyfp::normalize(m_plus);
@@ -1428,7 +1558,7 @@ template <typename FloatType> boundaries compute_boundaries(FloatType value) {
 constexpr int kAlpha = -60;
 constexpr int kGamma = -32;
 
-struct cached_power // c = f * 2^e ~= 10^k
+struct cached_power  // c = f * 2^e ~= 10^k
 {
   std::uint64_t f;
   int e;
@@ -1597,7 +1727,6 @@ inline int find_largest_pow10(const std::uint32_t n, std::uint32_t &pow10) {
 inline void grisu2_round(char *buf, int len, std::uint64_t dist,
                          std::uint64_t delta, std::uint64_t rest,
                          std::uint64_t ten_k) {
-
   //               <--------------------------- delta ---->
   //                                  <---- dist --------->
   // --------------[------------------+-------------------]--------------
@@ -1648,10 +1777,10 @@ inline void grisu2_digit_gen(char *buffer, int &length, int &decimal_exponent,
 
   std::uint64_t delta =
       diyfp::sub(M_plus, M_minus)
-          .f; // (significand of (M+ - M-), implicit exponent is e)
+          .f;  // (significand of (M+ - M-), implicit exponent is e)
   std::uint64_t dist =
       diyfp::sub(M_plus, w)
-          .f; // (significand of (M+ - w ), implicit exponent is e)
+          .f;  // (significand of (M+ - w ), implicit exponent is e)
 
   // Split M+ = f * 2^e into two parts p1 and p2 (note: e < 0):
   //
@@ -1664,8 +1793,8 @@ inline void grisu2_digit_gen(char *buffer, int &length, int &decimal_exponent,
 
   auto p1 = static_cast<std::uint32_t>(
       M_plus.f >>
-      -one.e); // p1 = f div 2^-e (Since -e >= 32, p1 fits into a 32-bit int.)
-  std::uint64_t p2 = M_plus.f & (one.f - 1); // p2 = f mod 2^-e
+      -one.e);  // p1 = f div 2^-e (Since -e >= 32, p1 fits into a 32-bit int.)
+  std::uint64_t p2 = M_plus.f & (one.f - 1);  // p2 = f mod 2^-e
 
   // 1)
   //
@@ -1698,13 +1827,13 @@ inline void grisu2_digit_gen(char *buffer, int &length, int &decimal_exponent,
     //      M+ = buffer * 10^n + (p1 + p2 * 2^e)    (buffer = 0 for n = k)
     //      pow10 = 10^(n-1) <= p1 < 10^n
     //
-    const std::uint32_t d = p1 / pow10; // d = p1 div 10^(n-1)
-    const std::uint32_t r = p1 % pow10; // r = p1 mod 10^(n-1)
+    const std::uint32_t d = p1 / pow10;  // d = p1 div 10^(n-1)
+    const std::uint32_t r = p1 % pow10;  // r = p1 mod 10^(n-1)
     //
     //      M+ = buffer * 10^n + (d * 10^(n-1) + r) + p2 * 2^e
     //         = (buffer * 10 + d) * 10^(n-1) + (r + p2 * 2^e)
     //
-    buffer[length++] = static_cast<char>('0' + d); // buffer := buffer * 10 + d
+    buffer[length++] = static_cast<char>('0' + d);  // buffer := buffer * 10 + d
     //
     //      M+ = buffer * 10^(n-1) + (r + p2 * 2^e)
     //
@@ -1800,14 +1929,14 @@ inline void grisu2_digit_gen(char *buffer, int &length, int &decimal_exponent,
     //         (10*p2 mod 2^-e)) * 2^e
     //
     p2 *= 10;
-    const std::uint64_t d = p2 >> -one.e;     // d = (10 * p2) div 2^-e
-    const std::uint64_t r = p2 & (one.f - 1); // r = (10 * p2) mod 2^-e
+    const std::uint64_t d = p2 >> -one.e;      // d = (10 * p2) div 2^-e
+    const std::uint64_t r = p2 & (one.f - 1);  // r = (10 * p2) mod 2^-e
     //
     //      M+ = buffer * 10^-m + 10^-m * (1/10 * (d * 2^-e + r) * 2^e
     //         = buffer * 10^-m + 10^-m * (1/10 * (d + r * 2^e))
     //         = (buffer * 10 + d) * 10^(-m-1) + 10^(-m-1) * r * 2^e
     //
-    buffer[length++] = static_cast<char>('0' + d); // buffer := buffer * 10 + d
+    buffer[length++] = static_cast<char>('0' + d);  // buffer := buffer * 10 + d
     //
     //      M+ = buffer * 10^(-m-1) + 10^(-m-1) * r * 2^e
     //
@@ -1864,7 +1993,6 @@ The buffer must be large enough, i.e. >= max_digits10.
 */
 inline void grisu2(char *buf, int &len, int &decimal_exponent, diyfp m_minus,
                    diyfp v, diyfp m_plus) {
-
   //  --------(-----------------------+-----------------------)--------    (A)
   //          m-                      v                       m+
   //
@@ -1876,7 +2004,7 @@ inline void grisu2(char *buf, int &len, int &decimal_exponent, diyfp m_minus,
 
   const cached_power cached = get_cached_power_for_binary_exponent(m_plus.e);
 
-  const diyfp c_minus_k(cached.f, cached.e); // = c ~= 10^-k
+  const diyfp c_minus_k(cached.f, cached.e);  // = c ~= 10^-k
 
   // The exponent of the products is = v.e + c_minus_k.e + q and is in the range
   // [alpha,gamma]
@@ -1908,7 +2036,7 @@ inline void grisu2(char *buf, int &len, int &decimal_exponent, diyfp m_minus,
   const diyfp M_minus(w_minus.f + 1, w_minus.e);
   const diyfp M_plus(w_plus.f - 1, w_plus.e);
 
-  decimal_exponent = -cached.k; // = -(-k) = k
+  decimal_exponent = -cached.k;  // = -(-k) = k
 
   grisu2_digit_gen(buf, len, decimal_exponent, M_minus, w, M_plus);
 }
@@ -1957,7 +2085,6 @@ void grisu2(char *buf, int &len, int &decimal_exponent, FloatType value) {
 @pre -1000 < e < 1000
 */
 inline char *append_exponent(char *buf, int e) {
-
   if (e < 0) {
     e = -e;
     *buf++ = '-';
@@ -1995,7 +2122,6 @@ notation. Otherwise it will be printed in exponential notation.
 */
 inline char *format_buffer(char *buf, int len, int decimal_exponent,
                            int min_exp, int max_exp) {
-
   const int k = len;
   const int n = len + decimal_exponent;
 
@@ -2053,7 +2179,7 @@ inline char *format_buffer(char *buf, int len, int decimal_exponent,
   return append_exponent(buf, n - 1);
 }
 
-} // namespace dtoa_impl
+}  // namespace dtoa_impl
 
 /*!
 The format of the resulting decimal representation is similar to printf's %g
@@ -2063,9 +2189,9 @@ format. Returns an iterator pointing past-the-end of the decimal representation.
 @note The result is NOT null-terminated.
 */
 char *to_chars(char *first, const char *last, double value) {
-  static_cast<void>(last); // maybe unused - fix warning
+  static_cast<void>(last);  // maybe unused - fix warning
 
-  //bool negative = std::signbit(value);
+  // bool negative = std::signbit(value);
   bool negative = (*reinterpret_cast<uint64_t *>(&value)) & (1 << 31ull);
   if (negative) {
     value = -value;
@@ -2077,7 +2203,7 @@ char *to_chars(char *first, const char *last, double value) {
 #pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
 
-  if (value == 0) // +-0
+  if (value == 0)  // +-0
   {
     *first++ = '0';
     // Make it look like a floating-point number (#362, #378)
@@ -2104,15 +2230,167 @@ char *to_chars(char *first, const char *last, double value) {
   return dtoa_impl::format_buffer(first, len, decimal_exponent, kMinExp,
                                   kMaxExp);
 }
-} // namespace internal
-} // namespace simdjson
+}  // namespace internal
+}  // namespace simdjson
 
-#endif // !MINIJSON_USE_STRTOD
+#endif  // !MINIJSON_USE_STRTOD
 
-#endif // MINIJSON_IMPLEMENTATION
+#endif  // MINIJSON_IMPLEMENTATION
 
 #endif /* minijson_h */
 
+namespace safetensors {
+
+namespace detail {
+
+bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
+                   const std::string &filepath, void *) {
+#ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
+  if (asset_manager) {
+    AAsset *asset = AAssetManager_open(asset_manager, filepath.c_str(),
+                                       AASSET_MODE_STREAMING);
+    if (!asset) {
+      if (err) {
+        (*err) += "File open error : " + filepath + "\n";
+      }
+      return false;
+    }
+    size_t size = AAsset_getLength(asset);
+    if (size == 0) {
+      if (err) {
+        (*err) += "Invalid file size : " + filepath +
+                  " (does the path point to a directory?)";
+      }
+      return false;
+    }
+    out->resize(size);
+    AAsset_read(asset, reinterpret_cast<char *>(&out->at(0)), size);
+    AAsset_close(asset);
+    return true;
+  } else {
+    if (err) {
+      (*err) += "No asset manager specified : " + filepath + "\n";
+    }
+    return false;
+  }
+#else
+#ifdef _WIN32
+#if defined(__GLIBCXX__)  // mingw
+  int file_descriptor =
+      _wopen(UTF8ToWchar(filepath).c_str(), _O_RDONLY | _O_BINARY);
+  __gnu_cxx::stdio_filebuf<char> wfile_buf(file_descriptor, std::ios_base::in);
+  std::istream f(&wfile_buf);
+#elif defined(_MSC_VER) || defined(_LIBCPP_VERSION)
+  // For libcxx, assume _LIBCPP_HAS_OPEN_WITH_WCHAR is defined to accept
+  // `wchar_t *`
+  std::ifstream f(UTF8ToWchar(filepath).c_str(), std::ifstream::binary);
+#else
+  // Unknown compiler/runtime
+  std::ifstream f(filepath.c_str(), std::ifstream::binary);
+#endif
+#else
+  std::ifstream f(filepath.c_str(), std::ifstream::binary);
+#endif
+  if (!f) {
+    if (err) {
+      (*err) += "File open error : " + filepath + "\n";
+    }
+    return false;
+  }
+
+  // For directory(and pipe?), peek() will fail(Posix gnustl/libc++ only)
+  f.peek();
+  if (!f) {
+    if (err) {
+      (*err) +=
+          "File read error. Maybe empty file or invalid file : " + filepath +
+          "\n";
+    }
+    return false;
+  }
+
+  f.seekg(0, f.end);
+  size_t sz = static_cast<size_t>(f.tellg());
+
+  // std::cout << "sz = " << sz << "\n";
+  f.seekg(0, f.beg);
+
+  if (int64_t(sz) < 0) {
+    if (err) {
+      (*err) += "Invalid file size : " + filepath +
+                " (does the path point to a directory?)";
+    }
+    return false;
+  } else if (sz == 0) {
+    if (err) {
+      (*err) += "File is empty : " + filepath + "\n";
+    }
+    return false;
+  } else if (sz >= (std::numeric_limits<std::streamoff>::max)()) {
+    if (err) {
+      (*err) += "Invalid file size : " + filepath + "\n";
+    }
+    return false;
+  }
+
+  out->resize(sz);
+  f.read(reinterpret_cast<char *>(&out->at(0)),
+         static_cast<std::streamsize>(sz));
+
+  return true;
+#endif
+}
+
+}  // namespace detail
+
+//
+// - 8byte: header_size
+// - json data(header_size bytes)
+// - tensor data(filesize - header_size)
+//
+
+bool load_from_file(const std::string &filename, safetensors_t *st,
+                    std::string *err) {
+  std::vector<unsigned char> data;
+  if (!detail::ReadWholeFile(&data, err, filename, nullptr)) {
+    return false;
+  }
+
+  if (data.size() < 16) {
+    if (err) {
+      (*err) += "File size is too short.\n";
+    }
+    return false;
+  }
+
+  uint64_t header_size{0};
+  memcpy(reinterpret_cast<unsigned char *>(&header_size), data.data(),
+         sizeof(uint64_t));
+
+  if (header_size < 4) {
+    if (err) {
+      (*err) += "Header size is too short.\n";
+    }
+    return false;
+  }
+
+  if ((8 + header_size) > data.size()) {
+    if (err) {
+      (*err) += "Header size is too big.\n";
+    }
+    return false;
+  }
+
+  // assume JSON data is small enough.
+  std::string json_str(reinterpret_cast<char *>(&data[8]), header_size);
+  const char *p = json_str.c_str();
+
+  minijson::value v;
+  minijson::error e = minijson::parse(p, v);
+
+  return true;
+}
+
+}  // namespace safetensors
 
 #endif
-
