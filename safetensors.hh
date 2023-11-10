@@ -22,6 +22,9 @@ extern AAssetManager *asset_manager;
 
 namespace safetensors {
 
+// Max JSON size 
+constexpr size_t kMaxJSONSize = 1024ull * 1024ull * 64ull;
+
 enum dtype {
   kBOOL,
   kUINT8,
@@ -55,27 +58,62 @@ struct safetensors_t {
 };
 
 //
-// Load safetensors data from file or memory.
-// Tensor data is copied.
+// Load safetensors data from file.
+// Tensor data is copied to `safetensors_t`.
 //
-// filename: Assume UTF-8 string filepath
+// @param[in] filename Filepath. Assume UTF-8 filepath. 
+// @param[out] st safetensors data.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+//
+// @return true upon success. `err` will be filled when false.
 bool load_from_file(const std::string &filename, safetensors_t *st,
                     std::string *warn, std::string *err);
 
+//
+// Load safetensors data from memory.
+// Tensor data is copied to `safetensors_t`.
+//
+// @param[in] addr Memory address of safetensors data.
+// @param[in] nbytes The size in bytes.
 // @param[in] filename Filename of corresponding memory data. Can be empty.
-bool load_from_memory(const char *bytes, const size_t nbytes,
+// @param[out] st safetensors data.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+//
+// @return true upon success. `err` will be filled when false.
+// 
+bool load_from_memory(const uint8_t *addr, const size_t nbytes,
                       const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
 
 //
 // Load safetensors with memory mapping(i.e. zero-copy).
 // Tensor data is not copied to `safetensors_t` object, thus the app must hold
-// file or memory until `safetensor_t` object is live.
+// file until `safetensor_t` object is live.
 //
+// @param[in] filename Filepath. Assume UTF-8 filepath. 
+// @param[out] st safetensors data.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+//
+// @return true upon success. `err` will be filled when false.
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
                     std::string *warn, std::string *err);
 
-// @param[in] filename (optional) Filename of corresponding memory data.
+//
+// Load safetensors with memory mapping(i.e. zero-copy).
+// Tensor data is not copied to `safetensors_t` object, thus the app must not free
+// `addr` until `safetensor_t` object is live.
+// 
+// @param[in] addr Memory address of safetensors data.
+// @param[in] nbytes The size in bytes.
+// @param[in] filename Filename of corresponding memory data. Can be empty.
+// @param[out] st safetensors data.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+//
+// @return true upon success. `err` will be filled when false.
 bool mmap_from_memory(const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
 
@@ -264,12 +302,16 @@ class value {
     if (TypeTraits<T>::type_id() == TypeTraits<string>::type_id() &&
         t == string_type)
       return true;
+    if (TypeTraits<T>::type_id() == TypeTraits<array>::type_id() &&
+        t == array_type)
+      return true;
     if (TypeTraits<T>::type_id() == TypeTraits<object>::type_id() &&
         t == object_type)
       return true;
     return false;
   }
 
+#if 0
   // TODO: type-safe get.
   template <typename T>
   T &get() const {
@@ -277,8 +319,72 @@ class value {
       return *reinterpret_cast<T *>(const_cast<array *>(u.a));
     if (t == object_type) return *reinterpret_cast<T *>(u.o);
     if (t == string_type) return *reinterpret_cast<T *>(u.s);
+    if (t == null_type) return *reinterpret_cast<null_t *>(u.n);
+    if (t == boolean_type) return *reinterpret_cast<boolean *>(u.b);
     return *reinterpret_cast<T *>(const_cast<number *>(&u.d));
   }
+#endif
+
+  template <typename T>
+  const T *as() const {
+    if ((t == array_type) && (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
+      return reinterpret_cast<const T *>(u.a);
+    }
+
+    if ((t == object_type) && (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
+      return reinterpret_cast<const T *>(u.o);
+    }
+
+    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<string>::type_id())) {
+      return reinterpret_cast<const T *>(u.s);
+    }
+
+    if ((t == null_type) && (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
+      return reinterpret_cast<const T *>(&u.n);
+    }
+
+    if ((t == boolean_type) && (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
+      return reinterpret_cast<const T *>(&u.b);
+    }
+
+    if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
+      return reinterpret_cast<const T *>(&u.d);
+    }
+      
+    return nullptr;
+  }
+
+#if 0
+  template <typename T>
+  T *as() const {
+    if ((t == array_type) && (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
+      return reinterpret_cast<T *>(const_cast<array *>(u.a));
+    }
+
+    if ((t == object_type) && (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
+      return reinterpret_cast<T *>(u.o);
+    }
+
+    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<string>::type_id())) {
+      return reinterpret_cast<T *>(u.s);
+    }
+
+    if ((t == null_type) && (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
+      return reinterpret_cast<T *>(&u.n);
+    }
+
+    if ((t == boolean_type) && (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
+      return reinterpret_cast<T *>(&u.b);
+    }
+
+    if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
+      return reinterpret_cast<T *>(&u.d);
+    }
+      
+    return nullptr;
+  }
+#endif
+
   null_t &operator=(null_t &n) {
     t = null_type;
     u.n = n;
@@ -360,21 +466,21 @@ class value {
       ss << double(u.d);
     } else if (t == string_type) {
       ss << str(u.s->c_str());
-    } else if (t == array_type) {
-      array::iterator i;
+    } else if (const array *pa = as<array>()) {
+      array::const_iterator i;
       ss << "[";
-      array a = get<array>();
-      for (i = a.begin(); i != a.end(); i++) {
-        if (i != a.begin()) ss << ", ";
+      //array a = get<array>();
+      for (i = pa->begin(); i !=pa->end(); i++) {
+        if (i != pa->begin()) ss << ", ";
         ss << i->str();
       }
       ss << "]";
-    } else if (t == object_type) {
-      object::iterator i;
+    } else if (auto po = as<object>()) {
+      object::const_iterator i;
       ss << "{";
-      object o = get<object>();
-      for (i = o.begin(); i != o.end(); i++) {
-        if (i != o.begin()) ss << ", ";
+      //object o = get<object>();
+      for (i = po->begin(); i != po->end(); i++) {
+        if (i != po->begin()) ss << ", ";
         ss << str(i->first.c_str());
         ss << ": " << i->second.str();
       }
@@ -410,7 +516,13 @@ inline error parse_object(Iter &i, value &v) {
       i++;
       e = parse_any(i, vv);
       if (e != no_error) return e;
-      o[vk.get<std::string>()] = vv;
+
+      auto ps = vk.as<std::string>();
+      if (!ps) {
+        return unknown_type_error;
+      }
+
+      o[*ps] = vv;
       MINIJSON_SKIP(i)
       if (!(*i)) {
         return corrupted_json_error;
@@ -2350,21 +2462,27 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 //
 
 bool load_from_file(const std::string &filename, safetensors_t *st,
-                    std::string *err) {
+                    std::string *warn, std::string *err) {
   std::vector<unsigned char> data;
   if (!detail::ReadWholeFile(&data, err, filename, nullptr)) {
     return false;
   }
 
-  if (data.size() < 16) {
+  return load_from_memory(reinterpret_cast<const uint8_t *>(data.data()), data.size(), filename, st, warn, err);
+}
+
+bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::string &filename, safetensors_t *st,
+                    std::string *warn, std::string *err) {
+
+  if (nbytes < 16) {
     if (err) {
-      (*err) += "File size is too short.\n";
+      (*err) += "Size is too short.\n";
     }
     return false;
   }
 
   uint64_t header_size{0};
-  memcpy(reinterpret_cast<unsigned char *>(&header_size), data.data(),
+  memcpy(reinterpret_cast<unsigned char *>(&header_size), addr,
          sizeof(uint64_t));
 
   if (header_size < 4) {
@@ -2374,19 +2492,45 @@ bool load_from_file(const std::string &filename, safetensors_t *st,
     return false;
   }
 
-  if ((8 + header_size) > data.size()) {
+  if ((8 + header_size) > nbytes) {
     if (err) {
       (*err) += "Header size is too big.\n";
     }
     return false;
   }
 
+  if (header_size > kMaxJSONSize) {
+    if (err) {
+      (*err) += "Header JSON size exceeds the limit(" + std::to_string(kMaxJSONSize) + ").\n";
+    }
+    return false;
+  }
+
   // assume JSON data is small enough.
-  std::string json_str(reinterpret_cast<char *>(&data[8]), header_size);
+  std::string json_str(reinterpret_cast<const char *>(&addr[8]), header_size);
   const char *p = json_str.c_str();
 
   minijson::value v;
   minijson::error e = minijson::parse(p, v);
+
+  if (e != minijson::no_error) {
+    if (err) {
+      std::string json_err(minijson::errstr(e));
+      (*err) += "JSON parse error: " + json_err + "\n";
+    }
+
+    return false;
+  }
+
+  // root element must be dict.
+  if (!v.is<minijson::object>()) {
+    if (err) {
+      (*err) += "JSON root elements must be object(dict)\n";
+    }
+  }
+
+  
+
 
   return true;
 }
