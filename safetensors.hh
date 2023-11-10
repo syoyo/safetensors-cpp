@@ -60,24 +60,24 @@ struct safetensors_t {
 //
 // filename: Assume UTF-8 string filepath
 bool load_from_file(const std::string &filename, safetensors_t *st,
-                    std::string *err);
-bool load_from_memory(const char *bytes, const size_t nbytes, safetensors_t *st,
-                      std::string *err);
+                    std::string *warn, std::string *err);
+
+// @param[in] filename Filename of corresponding memory data. Can be empty.
+bool load_from_memory(const char *bytes, const size_t nbytes,
+                      const std::string &filename, safetensors_t *st,
+                      std::string *warn, std::string *err);
 
 //
-// Load safetensors with memory mapping.
-// Tensor data is not copied, thus the app must hold file or memory until
-// safetensor_t is live.
+// Load safetensors with memory mapping(i.e. zero-copy).
+// Tensor data is not copied to `safetensors_t` object, thus the app must hold
+// file or memory until `safetensor_t` object is live.
 //
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
-                    std::string *err);
-bool mmap_from_memory(const std::string &filename, safetensors_t *st,
-                      std::string *err);
+                    std::string *warn, std::string *err);
 
-//
-// Load safetensors from memory with memory mapping(i.e. zero-copy).
-//
-bool mmap_from_memory(const std::string &filename);
+// @param[in] filename (optional) Filename of corresponding memory data.
+bool mmap_from_memory(const std::string &filename, safetensors_t *st,
+                      std::string *warn, std::string *err);
 
 }  // namespace safetensors
 
@@ -116,10 +116,10 @@ bool mmap_from_memory(const std::string &filename);
 namespace simdjson {
 namespace internal {
 
-double from_chars(const char* first) noexcept;
-double from_chars(const char* first, const char* end) noexcept;
+double from_chars(const char *first) noexcept;
+double from_chars(const char *first, const char *end) noexcept;
 
-char* to_chars(char* first, const char* last, double value);
+char *to_chars(char *first, const char *last, double value);
 
 }  // namespace internal
 }  // namespace simdjson
