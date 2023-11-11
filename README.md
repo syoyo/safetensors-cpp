@@ -1,11 +1,11 @@
-# Header-only safetensors loader in C++
+# Header-only safetensors loader in C/C++
 
-Secure, header-only safetensors loader and writer in portable C++.
+Secure, header-only safetensors loader and writer in portable C/C++.
 Code is tested with fuzzer.
 
 ## Requirements
 
-* C++11 compiler
+* C++11 and C11 compiler
 
 ## Fuzz testing
 
@@ -20,6 +20,12 @@ See [fuzz](fuzz) directory.
 
 T.B.W.
 ```
+
+## C API
+
+W.I.P.
+
+C API will be provided in `safetensors-c.h` for other language bindings.
 
 
 ## License

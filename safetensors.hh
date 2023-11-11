@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 #ifdef __ANDROID__
 #ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
@@ -22,8 +23,10 @@ extern AAssetManager *asset_manager;
 
 namespace safetensors {
 
-// Max JSON size 
+// Max JSON size
 constexpr size_t kMaxJSONSize = 1024ull * 1024ull * 64ull;
+
+constexpr size_t kMaxDim = 8; // must be equal to SAFETENSORS_C_MAX_DIM in `safetensors-c.h`
 
 enum dtype {
   kBOOL,
@@ -41,14 +44,15 @@ enum dtype {
   kUINT64,
 };
 
-struct metadata_t {
+struct tensor_t {
   dtype dtype;
   std::vector<size_t> shape;
-  std::pair<size_t, size_t> data_offsets;
+  std::array<size_t, 2> data_offsets;
 };
 
 struct safetensors_t {
-  std::unordered_map<std::string, const metadata_t> metas;
+  std::unordered_map<std::string, tensor_t> tensors;
+  std::unordered_map<std::string, std::string> metadata;
   std::vector<uint8_t> stoage;  // empty when mmap'ed
 
   const uint8_t *mmap_addr{nullptr};
@@ -61,7 +65,7 @@ struct safetensors_t {
 // Load safetensors data from file.
 // Tensor data is copied to `safetensors_t`.
 //
-// @param[in] filename Filepath. Assume UTF-8 filepath. 
+// @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
 // @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
 // @param[out] err Error message buffer(can be nullptr if you don't need error message)
@@ -82,7 +86,7 @@ bool load_from_file(const std::string &filename, safetensors_t *st,
 // @param[out] err Error message buffer(can be nullptr if you don't need error message)
 //
 // @return true upon success. `err` will be filled when false.
-// 
+//
 bool load_from_memory(const uint8_t *addr, const size_t nbytes,
                       const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
@@ -92,7 +96,7 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 // Tensor data is not copied to `safetensors_t` object, thus the app must hold
 // file until `safetensor_t` object is live.
 //
-// @param[in] filename Filepath. Assume UTF-8 filepath. 
+// @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
 // @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
 // @param[out] err Error message buffer(can be nullptr if you don't need error message)
@@ -105,7 +109,7 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
 // Load safetensors with memory mapping(i.e. zero-copy).
 // Tensor data is not copied to `safetensors_t` object, thus the app must not free
 // `addr` until `safetensor_t` object is live.
-// 
+//
 // @param[in] addr Memory address of safetensors data.
 // @param[in] nbytes The size in bytes.
 // @param[in] filename Filename of corresponding memory data. Can be empty.
@@ -196,8 +200,8 @@ class value;
 
 typedef bool boolean;
 typedef double number;
-typedef std::string string;
-typedef std::map<string, value> object;
+//typedef std::string string;
+typedef std::map<std::string, value> object;
 typedef std::vector<value> array;
 typedef struct {
 } null_t;
@@ -223,7 +227,7 @@ struct TypeTraits<number> {
 };
 
 template <>
-struct TypeTraits<string> {
+struct TypeTraits<std::string> {
   static constexpr uint32_t type_id() { return 3; }
 };
 
@@ -244,7 +248,7 @@ class value {
     null_t n;
     boolean b;
     number d;
-    string *s;
+    std::string *s;
     array *a;
     object *o;
   } u;
@@ -269,8 +273,8 @@ class value {
   value(null_t n) : t(null_type), u() { u.n = n; }
   value(boolean b) : t(boolean_type), u() { u.b = b; }
   value(number d) : t(boolean_type), u() { u.d = d; }
-  value(const char *s) : t(string_type), u() { u.s = new string(s); }
-  value(const string &s) : t(string_type), u() { u.s = new string(s); }
+  value(const char *s) : t(string_type), u() { u.s = new std::string(s); }
+  value(const std::string &s) : t(string_type), u() { u.s = new std::string(s); }
   value(const array &a) : t(array_type), u() { u.a = new array(a); }
   value(const object &o) : t(object_type), u() { u.o = new object(o); }
   value(const value &v) : t(v.t), u() {
@@ -281,7 +285,7 @@ class value {
       u.o = new object();
       *u.o = *v.u.o;
     } else if (t == string_type) {
-      u.s = new string();
+      u.s = new std::string();
       *u.s = *v.u.s;
     } else
       u.d = v.u.d;
@@ -299,7 +303,7 @@ class value {
     if (TypeTraits<T>::type_id() == TypeTraits<number>::type_id() &&
         t == number_type)
       return true;
-    if (TypeTraits<T>::type_id() == TypeTraits<string>::type_id() &&
+    if (TypeTraits<T>::type_id() == TypeTraits<std::string>::type_id() &&
         t == string_type)
       return true;
     if (TypeTraits<T>::type_id() == TypeTraits<array>::type_id() &&
@@ -335,7 +339,7 @@ class value {
       return reinterpret_cast<const T *>(u.o);
     }
 
-    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<string>::type_id())) {
+    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<std::string>::type_id())) {
       return reinterpret_cast<const T *>(u.s);
     }
 
@@ -350,7 +354,7 @@ class value {
     if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
       return reinterpret_cast<const T *>(&u.d);
     }
-      
+
     return nullptr;
   }
 
@@ -380,7 +384,7 @@ class value {
     if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
       return reinterpret_cast<T *>(&u.d);
     }
-      
+
     return nullptr;
   }
 #endif
@@ -403,13 +407,13 @@ class value {
   const std::string &operator=(const char *s) {
     _free_u();
     t = string_type;
-    u.s = new string(s);
+    u.s = new std::string(s);
     return *u.s;
   }
-  const string &operator=(const string &s) {
+  const std::string &operator=(const std::string &s) {
     _free_u();
     t = string_type;
-    u.s = new string(s);
+    u.s = new std::string(s);
     return *u.s;
   }
   const object &operator=(const object &o) {
@@ -432,11 +436,40 @@ class value {
     } else if (t == object_type) {
       u.o = new object(*v.u.o);
     } else if (t == string_type) {
-      u.s = new string(*v.u.s);
+      u.s = new std::string(*v.u.s);
     } else
       u.d = v.u.d;
     return *this;
   }
+
+  std::string type_name() const {
+    if (t == array_type) {
+      return "array";
+    }
+
+    if (t == object_type){
+      return "object";
+    }
+
+    if (t == string_type) {
+      return "string";
+    }
+
+    if (t == null_type) {
+      return "null";
+    }
+
+    if (t == boolean_type) {
+      return "boolean";
+    }
+
+    if (t == number_type) {
+      return "number";
+    }
+
+    return "[[invalid]]";
+  }
+
   std::string str(const char *p) const {
     std::stringstream ss;
     ss << '"';
@@ -454,6 +487,7 @@ class value {
     ss << '"';
     return ss.str();
   }
+
   std::string str() const {
     std::stringstream ss;
     if (t == unknown_type) {
@@ -2453,6 +2487,275 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 #endif
 }
 
+bool parse_metadata(
+  const minijson::value &v,
+  std::unordered_map<std::string, std::string> &dst,
+  std::string *err) {
+
+  if (auto po = v.as<minijson::object>()) {
+    minijson::object::const_iterator i;
+    for (i = po->begin(); i != po->end(); i++) {
+      if (auto so = i->second.as<std::string>()) {
+        dst[i->first] = *so;
+      } else {
+        if (err) {
+          (*err) += "`" + i->first + "` must be string type, but got " + i->second.type_name() + ".\n";
+        }
+        return false;
+      }
+    }
+  } else {
+    if (err) {
+      (*err) += "`__metadata__` value must be JSON object.\n";
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool parse_dtype(const minijson::value &v,
+  safetensors::dtype &dtype,
+  std::string *err) {
+
+  if (auto so = v.as<std::string>()) {
+    if ((*so) == "BOOL") {
+      dtype = safetensors::dtype::kBOOL;
+    } else if ((*so) == "U8") {
+      dtype = safetensors::dtype::kUINT8;
+    } else if ((*so) == "I8") {
+      dtype = safetensors::dtype::kINT8;
+    } else if ((*so) == "U16") {
+      dtype = safetensors::dtype::kUINT16;
+    } else if ((*so) == "I16") {
+      dtype = safetensors::dtype::kINT16;
+    } else if ((*so) == "U32") {
+      dtype = safetensors::dtype::kUINT32;
+    } else if ((*so) == "I32") {
+      dtype = safetensors::dtype::kINT32;
+    } else if ((*so) == "U64") {
+      dtype = safetensors::dtype::kUINT64;
+    } else if ((*so) == "I64") {
+      dtype = safetensors::dtype::kINT64;
+    } else if ((*so) == "F16") {
+      dtype = safetensors::dtype::kFLOAT16;
+    } else if ((*so) == "BF16") {
+      dtype = safetensors::dtype::kBFLOAT16;
+    } else if ((*so) == "F32") {
+      dtype = safetensors::dtype::kFLOAT32;
+    } else if ((*so) == "F64") {
+      dtype = safetensors::dtype::kFLOAT64;
+    } else {
+      if (err) {
+        (*err) += "Unknown `dtype` string: " + *so + ".\n";
+      }
+      return false;
+    }
+  } else {
+    if (err) {
+      (*err) += "`dtype` item should be string type but got " + v.type_name() + ".\n";
+    }
+    return false;
+  }
+
+  return true;
+
+}
+
+bool parse_shape(const minijson::value &v,
+  std::vector<size_t> &dst, std::string *err) {
+
+  // NOTE:
+  // - Empty tensors (tensors with 1 dimension being 0) are allowed
+  // - [] is allowed(0-Rank tensor = merely a scalar
+
+  if (auto pa = v.as<minijson::array>()) {
+    minijson::array::const_iterator i;
+
+    for (i = pa->begin(); i != pa->end(); i++) {
+
+      if (auto pn = i->as<minijson::number>()) {
+
+        if (dst.size() >= kMaxDim) {
+          if (err) {
+            (*err) += "`shape` length must be less than " + std::to_string(kMaxDim) + " but got " + std::to_string(dst.size()) + ".\n";
+          }
+          return false;
+        }
+
+        dst.push_back(size_t(*pn));
+
+      } else {
+        if (err) {
+          (*err) += "Array item in `shape` must be number type, but got " + i->type_name() + ".\n";
+        }
+        return false;
+      }
+
+    }
+  } else {
+
+    if (err) {
+      (*err) += "`shape` value must be JSON array, but got " + v.type_name() + ".\n";
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool parse_data_offsets(const minijson::value &v,
+  std::array<size_t, 2> &dst, std::string *err) {
+
+  if (auto pa = v.as<minijson::array>()) {
+    minijson::array::const_iterator i;
+    size_t cnt = 0;
+
+    for (i = pa->begin(); i != pa->end(); i++) {
+
+      if (auto pn = i->as<minijson::number>()) {
+
+        if (cnt >= 2) {
+          if (err) {
+            (*err) += "`data_offsets` length must be 2.\n";
+          }
+          return false;
+        }
+
+        dst[cnt] = size_t(*pn);
+
+        cnt++;
+
+      } else {
+        if (err) {
+          (*err) += "Array item in `data_offsets` must be number type, but got " + i->type_name() + ".\n";
+        }
+        return false;
+      }
+
+    }
+
+    if (cnt != 2) {
+      if (err) {
+        (*err) += "`data_offsets` length must be 2.\n";
+      }
+      return false;
+    }
+  } else {
+
+    if (err) {
+      (*err) += "`data_offsets` value must be JSON array, but got " + v.type_name() + ".\n";
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool parse_tensor(
+  const std::string &name,
+  const minijson::value &v,
+  tensor_t &tensor,
+  std::string *err) {
+
+  if (auto po = v.as<minijson::object>()) {
+    minijson::object::const_iterator i;
+
+    bool dtype_found{false};
+    bool shape_found{false};
+    bool data_offsets_found{false};
+
+    dtype dtype;
+    std::vector<size_t> shape;
+    std::array<size_t, 2> data_offsets;
+
+    for (i = po->begin(); i != po->end(); i++) {
+      if (i->first == "dtype") {
+
+        if (!parse_dtype(i->second, dtype, err)) {
+          return false;
+        }
+
+        dtype_found = true;
+      } else if (i->first == "shape") {
+
+        if (!parse_shape(i->second, shape, err)) {
+          return false;
+        }
+
+        shape_found = true;
+      } else if (i->first == "data_offsets") {
+
+        if (!parse_data_offsets(i->second, data_offsets, err)) {
+          return false;
+        }
+
+        data_offsets_found = true;
+      } else {
+        // Unknown key. Report error?
+      }
+    }
+
+    if (!dtype_found) {
+      if (err) {
+        (*err) += "`" + name + "` does not have `dtype` item.\n";
+      }
+      return false;
+    }
+
+    if (!shape_found) {
+      if (err) {
+        (*err) += "`" + name + "` does not have `shape` item.\n";
+      }
+      return false;
+    }
+
+    bool is_empty_tensor{false};
+    if ((shape.size() > 0))
+    {
+      for (size_t i = 0; i < shape.size(); i++) {
+        if (shape[i] == 0) {
+          is_empty_tensor = true;
+          break;
+        }
+      }
+    }
+
+    if (is_empty_tensor) {
+      // They are not storing any data in the databuffer, yet retaining size in the header.
+      // So ignore data_offsets
+      if (data_offsets_found) {
+        // TODO: make this warn instead of err?
+        if (err) {
+          (*err) += "`" + name + "` is empty tensors(tensors with 1 dimension being 0), and no data in databuffer, but `data_offsets` item is provided.\n";
+        }
+        return false;
+      }
+    } else {
+
+      if (!data_offsets_found) {
+        if (err) {
+          (*err) += "`" + name + "` does not have `data_offsets` item.\n";
+        }
+        return false;
+      }
+
+    }
+
+    tensor.dtype = dtype;
+    tensor.shape = shape;
+    tensor.data_offsets = data_offsets;
+
+  } else {
+    if (err) {
+      (*err) += "`" + name + "` value must be JSON object.\n";
+    }
+    return false;
+  }
+
+  return true;
+}
+
 }  // namespace detail
 
 //
@@ -2494,7 +2797,7 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
 
   if ((8 + header_size) > nbytes) {
     if (err) {
-      (*err) += "Header size is too big.\n";
+      (*err) += "Header size " + std::to_string(header_size) + " + 8 exceeds input size " + std::to_string(nbytes) + " .\n";
     }
     return false;
   }
@@ -2522,14 +2825,30 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
     return false;
   }
 
+  std::unordered_map<std::string, std::string> metadata;
+
   // root element must be dict.
-  if (!v.is<minijson::object>()) {
+  if (auto po = v.as<minijson::object>()) {
+    minijson::object::const_iterator i;
+    for (i = po->begin(); i != po->end(); i++) {
+      if (i->first == "__metadata__") {
+        if (!parse_metadata(i->second, metadata, err)) {
+          return false;
+        }
+      } else {
+        // tensor
+        i->first;
+      }
+    }
+  } else {
     if (err) {
       (*err) += "JSON root elements must be object(dict)\n";
     }
   }
 
-  
+  st->tensors = std::move(tensors);
+  st->metadata = std::mvoe(metadata);
+
 
 
   return true;
