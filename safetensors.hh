@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -23,7 +23,8 @@ extern AAssetManager *asset_manager;
 
 namespace safetensors {
 
-constexpr size_t kMaxDim = 8; // must be equal to SAFETENSORS_C_MAX_DIM in `safetensors-c.h`
+constexpr size_t kMaxDim =
+    8;  // must be equal to SAFETENSORS_C_MAX_DIM in `safetensors-c.h`
 
 enum dtype {
   kBOOL,
@@ -48,8 +49,12 @@ struct tensor_t {
 };
 
 struct safetensors_t {
-  std::unordered_map<std::string, tensor_t> tensors;
-  std::unordered_map<std::string, std::string> metadata;
+  // we want ordered dict(iterate tensor by lexicographically in its name(key))
+  // as done in Python, so use traditional std::map(std::string's `operator<` is
+  // implemented following a lexicographical order) instead of
+  // std::unordered_map
+  std::map<std::string, tensor_t> tensors;
+  std::map<std::string, std::string> metadata;
   std::vector<uint8_t> storage;  // empty when mmap'ed
 
   const uint8_t *mmap_addr{nullptr};
@@ -59,8 +64,8 @@ struct safetensors_t {
 };
 
 //
-// Load safetensors data from file.
-// Tensor data is copied to `safetensors_t`.
+// Load safetensors from file.
+// databuffer is copied to `safetensors_t::storage`.
 //
 // @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
@@ -75,7 +80,7 @@ bool load_from_file(const std::string &filename, safetensors_t *st,
 
 //
 // Load safetensors data from memory.
-// Tensor data is copied to `safetensors_t`.
+// databuffer is copied to `safetensors_t::storage`.
 //
 // @param[in] addr Memory address of safetensors data.
 // @param[in] nbytes The size in bytes.
@@ -94,8 +99,8 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 
 //
 // Load safetensors with memory mapping(i.e. zero-copy).
-// Tensor data is not copied to `safetensors_t` object, thus the app must hold
-// file until `safetensor_t` object is live.
+// databuffer is not copied to `safetensors_t` object, thus the app must hold
+// file during `safetensor_t` object is live.
 //
 // @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
@@ -108,10 +113,11 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
                     std::string *warn, std::string *err);
 
+#if 0 // TODO
 //
 // Load safetensors with memory mapping(i.e. zero-copy).
-// Tensor data is not copied to `safetensors_t` object, thus the app must not
-// free `addr` until `safetensor_t` object is live.
+// databuffer is not copied to `safetensors_t` object, thus the app must not
+// free/unmap `addr` during `safetensor_t` object is live.
 //
 // @param[in] addr Memory address of safetensors data.
 // @param[in] nbytes The size in bytes.
@@ -123,8 +129,31 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
 // message)
 //
 // @return true upon success. `err` will be filled when false.
-bool mmap_from_memory(const std::string &filename, safetensors_t *st,
+bool mmap_from_memory(const void *arr, const size_t nbytes, const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
+#endif
+
+//
+// Utility functions
+// 
+
+// Returns shape[0] * shape[1] * ...
+// Empty Tensor(any shape[i] is 0) returns 0.
+// Zero-rank tensor([]) return 1.
+size_t get_shape_size(const tensor_t &t);
+
+// Returns dtype size in bytes.
+size_t get_dtype_bytes(const safetensors::dtype dtype);
+std::string get_dtype_str(const safetensors::dtype dtype);
+
+// Validate data_offsets of all tensors in safetensors_t.
+bool validate_data_offsets(const safetensors_t &st, std::string &err);
+
+uint16_t float_to_bfloat16(float x);
+float bfloat16_to_float(uint16_t x);
+
+uint16_t float_to_fp16(float x);
+float fp16_to_float(uint16_t x);
 
 }  // namespace safetensors
 
@@ -2447,7 +2476,6 @@ std::string WcharToUTF8(const std::wstring &wstr) {
 }
 #endif
 
-
 bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
                    const std::string &filepath, void *) {
 #ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
@@ -2547,16 +2575,15 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 }
 
 bool parse_metadata(const minijson::value &v,
-                    std::unordered_map<std::string, std::string> &dst,
-                    std::string *err) {
+                    std::map<std::string, std::string> &dst, std::string *err) {
   if (auto po = v.as<minijson::object>()) {
     minijson::object::const_iterator i;
     for (i = po->begin(); i != po->end(); i++) {
       if (auto so = i->second.as<std::string>()) {
-
         if (dst.count(i->first)) {
           if (err) {
-            (*err) += "Duplicate key `" + i->first + "` found in __metadata__.\n";
+            (*err) +=
+                "Duplicate key `" + i->first + "` found in __metadata__.\n";
           }
           return false;
         }
@@ -2630,8 +2657,7 @@ bool parse_shape(const minijson::value &v, std::vector<size_t> &dst,
                  std::string *err) {
   // NOTE:
   // - Empty tensors (tensors with 1 dimension being 0) are allowed
-  // - [] is allowed(0-Rank tensor = merely a scalar
-
+  // - [] is allowed(0-Rank tensor = merely a scalar)
   if (auto pa = v.as<minijson::array>()) {
     minijson::array::const_iterator i;
 
@@ -2724,7 +2750,7 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
 
     dtype dtype;
     std::vector<size_t> shape;
-    std::array<size_t, 2> data_offsets;
+    std::array<size_t, 2> data_offsets{};
 
     for (i = po->begin(); i != po->end(); i++) {
       if (i->first == "dtype") {
@@ -2808,118 +2834,6 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
   }
 
   return true;
-}
-
-size_t get_dtype_size(const safetensors::dtype &dtype) {
-  size_t sz = 0;
-
-  switch (dtype) {
-    case safetensors::dtype::kBOOL:
-      sz = 1;
-      break;  // FIXME: 1bit?
-    case safetensors::dtype::kUINT8:
-      sz = 1;
-      break;
-    case safetensors::dtype::kINT8:
-      sz = 1;
-      break;
-    case safetensors::dtype::kUINT16:
-      sz = 2;
-      break;
-    case safetensors::dtype::kINT16:
-      sz = 2;
-      break;
-    case safetensors::dtype::kINT32:
-      sz = 4;
-      break;
-    case safetensors::dtype::kUINT32:
-      sz = 4;
-      break;
-    case safetensors::dtype::kFLOAT16:
-      sz = 2;
-      break;
-    case safetensors::dtype::kBFLOAT16:
-      sz = 2;
-      break;
-    case safetensors::dtype::kFLOAT32:
-      sz = 4;
-      break;
-    case safetensors::dtype::kFLOAT64:
-      sz = 8;
-      break;
-    case safetensors::dtype::kINT64:
-      sz = 8;
-      break;
-    case safetensors::dtype::kUINT64:
-      sz = 8;
-      break;
-  }
-
-  return sz;
-}
-
-// Empty Tensor returns 0.
-size_t get_shape_size(const tensor_t &t) {
-  size_t sz = 1;
-
-  if (t.shape.size() >= kMaxDim) {  // invalid ndim
-    return 0;
-  }
-
-  for (size_t i = 0; i < t.shape.size(); i++) {
-    sz *= t.shape[i];
-  }
-
-  return sz;
-}
-
-bool validate_data_offsets(const safetensors_t &st, const size_t datasize,
-                           std::string &err) {
-  bool valid{true};
-
-  std::stringstream ss;
-
-  for (const auto &item : st.tensors) {
-
-    const tensor_t &tensor = item.second;
-
-    if (tensor.data_offsets[0] > tensor.data_offsets[1]) {
-      ss << item.first << ".data_offsets.BEGIN " << tensor.data_offsets[0] << " must be less than or equal to data_offsets.END " << tensor.data_offsets[1] << "\n";
-      valid = false;
-    }
-
-    size_t tensor_size = get_dtype_size(tensor.dtype) * get_shape_size(tensor);
-
-    // data_offsets are absolute offset from the databuffer(file)
-    if (tensor.data_offsets[0] > datasize) {
-      ss << "Tensor `" << item.first << "`.data_offset.BEGIN "
-         << tensor.data_offsets[0] << " exceeds input data size " << datasize
-         << ".\n";
-      valid = false;
-    }
-
-    if (tensor.data_offsets[1] > datasize) {
-      ss << "Tensor `" << item.first << "`.data_offset.END "
-         << tensor.data_offsets[1] << " exceeds input data size " << datasize
-         << ".\n";
-      valid = false;
-    }
-
-    size_t data_size = tensor.data_offsets[1] - tensor.data_offsets[0];
-
-    if (tensor_size != data_size) {
-      ss << "Data size mismatch. The size in Tensor `" << item.first << "` is "
-         << tensor_size << ", but the size from data_offsets is " << data_size
-         << "\n";
-      valid = false;
-    }
-  }
-
-  if (!valid) {
-    err = ss.str();
-  }
-
-  return valid;
 }
 
 // From llama.cpp
@@ -3092,12 +3006,14 @@ struct safetensors_mmap {
       return;
     }
 
-    addr = reinterpret_cast<uint8_t *>(MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0));
+    addr = reinterpret_cast<uint8_t *>(
+        MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0));
     error = GetLastError();
     CloseHandle(hMapping);
 
     if (addr == NULL) {
-      _err = "MapViewOfFile failed: " + safetensors_format_win_err(error) + "\n";
+      _err =
+          "MapViewOfFile failed: " + safetensors_format_win_err(error) + "\n";
     }
 
     if (prefetch) {
@@ -3146,6 +3062,182 @@ struct safetensors_mmap {
   }
 #endif
 };
+
+// Based on MIOPen bfloat16
+// https://github.com/ROCmSoftwarePlatform/MIOpen/blob/master/src/kernels/bfloat16_dev.hpp
+
+/*******************************************************************************
+ *
+ * MIT License
+ *
+ * Copyright (c) 2019 Advanced Micro Devices, Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ *all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ *******************************************************************************/
+
+typedef union cvt_bf16_fp32 {
+  uint32_t u32;
+  uint16_t ushortvec[2];
+
+  float f32;
+} cvt_bf16_fp32_t;
+
+float bfloat16_to_float(uint16_t src_val) {
+  cvt_bf16_fp32_t target_val;
+
+  target_val.ushortvec[0] = 0;
+  target_val.ushortvec[1] = src_val;
+
+  return target_val.f32;
+}
+
+uint16_t float_to_bfloat16(float src_val) {
+  cvt_bf16_fp32_t target_val;
+  target_val.f32 = src_val;
+  // BF16 round and NaN preservation code matches
+  // https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/library/include/rocblas_bfloat16.h
+  if ((~target_val.u32 & 0x7f800000) == 0)  // Inf or NaN
+  {
+    // When all of the exponent bits are 1, the value is Inf or NaN.
+    // Inf is indicated by a zero mantissa. NaN is indicated by any nonzero
+    // mantissa bit. Quiet NaN is indicated by the most significant mantissa
+    // bit being 1. Signaling NaN is indicated by the most significant
+    // mantissa bit being 0 but some other bit(s) being 1. If any of the
+    // lower 16 bits of the mantissa are 1, we set the least significant bit
+    // of the bfloat16 mantissa, in order to preserve signaling NaN in case
+    // the bloat16's mantissa bits are all 0.
+    if ((target_val.u32 & 0xffff) != 0) {
+      target_val.u32 |= 0x10000;  // Preserve signaling NaN
+    }
+  } else {
+#if 1  // MIOPEN_USE_RNE_BFLOAT16
+       // When the exponent bits are not all 1s, then the value is zero, normal,
+       // or subnormal. We round the bfloat16 mantissa up by adding 0x7FFF, plus
+       // 1 if the least significant bit of the bfloat16 mantissa is 1 (odd).
+       // This causes the bfloat16's mantissa to be incremented by 1 if the 16
+       // least significant bits of the float mantissa are greater than 0x8000,
+       // or if they are equal to 0x8000 and the least significant bit of the
+    // bfloat16 mantissa is 1 (odd). This causes it to be rounded to even when
+    // the lower 16 bits are exactly 0x8000. If the bfloat16 mantissa already
+    // has the value 0x7f, then incrementing it causes it to become 0x00 and
+    // the exponent is incremented by one, which is the next higher FP value
+    // to the unrounded bfloat16 value. When the bfloat16 value is subnormal
+    // with an exponent of 0x00 and a mantissa of 0x7F, it may be rounded up
+    // to a normal value with an exponent of 0x01 and a mantissa of 0x00.
+    // When the bfloat16 value has an exponent of 0xFE and a mantissa of 0x7F,
+    // incrementing it causes it to become an exponent of 0xFF and a mantissa
+    // of 0x00, which is Inf, the next higher value to the unrounded value.
+    target_val.u32 += (0x7fff + (target_val.ushortvec[1] & 1));
+#endif  // MIOPEN_USE_RNE_BFLOAT16
+  }
+
+  return target_val.ushortvec[1];
+}
+
+// half <-> float conversion based on: https://gist.github.com/rygorous/2156668
+// (CC0 license)
+//
+
+// Little endian
+union FP32le {
+  unsigned int u;
+  float f;
+  struct {
+    unsigned int Mantissa : 23;
+    unsigned int Exponent : 8;
+    unsigned int Sign : 1;
+  } s;
+};
+
+// Little endian
+union float16le {
+  unsigned short u;
+  struct {
+    unsigned int Mantissa : 10;
+    unsigned int Exponent : 5;
+    unsigned int Sign : 1;
+  } s;
+};
+
+float half_to_float_le(float16le h) {
+  static const FP32le magic = {113 << 23};
+  static const unsigned int shifted_exp = 0x7c00
+                                          << 13;  // exponent mask after shift
+  FP32le o;
+
+  o.u = (h.u & 0x7fffU) << 13U;           // exponent/mantissa bits
+  unsigned int exp_ = shifted_exp & o.u;  // just the exponent
+  o.u += (127 - 15) << 23;                // exponent adjust
+
+  // handle exponent special cases
+  if (exp_ == shifted_exp)    // Inf/NaN?
+    o.u += (128 - 16) << 23;  // extra exp adjust
+  else if (exp_ == 0)         // Zero/Denormal?
+  {
+    o.u += 1 << 23;  // extra exp adjust
+    o.f -= magic.f;  // renormalize
+  }
+
+  o.u |= (h.u & 0x8000U) << 16U;  // sign bit
+  return o.f;
+}
+
+uint16_t float_to_half_full_le(float _f) {
+  FP32le f;
+  f.f = _f;
+  float16le o = {0};
+
+  // Based on ISPC reference code (with minor modifications)
+  if (f.s.Exponent == 0)  // Signed zero/denormal (which will underflow)
+    o.s.Exponent = 0;
+  else if (f.s.Exponent == 255)  // Inf or NaN (all exponent bits set)
+  {
+    o.s.Exponent = 31;
+    o.s.Mantissa = f.s.Mantissa ? 0x200 : 0;  // NaN->qNaN and Inf->Inf
+  } else                                      // Normalized number
+  {
+    // Exponent unbias the single, then bias the halfp
+    int newexp = f.s.Exponent - 127 + 15;
+    if (newexp >= 31)  // Overflow, return signed infinity
+      o.s.Exponent = 31;
+    else if (newexp <= 0)  // Underflow
+    {
+      if ((14 - newexp) <= 24)  // Mantissa might be non-zero
+      {
+        unsigned int mant = f.s.Mantissa | 0x800000;  // Hidden 1 bit
+        o.s.Mantissa = mant >> (14 - newexp);
+        if ((mant >> (13 - newexp)) & 1)  // Check for rounding
+          o.u++;  // Round, might overflow into exp bit, but this is OK
+      }
+    } else {
+      o.s.Exponent = static_cast<unsigned int>(newexp);
+      o.s.Mantissa = f.s.Mantissa >> 13;
+      if (f.s.Mantissa & 0x1000)  // Check for rounding
+        o.u++;                    // Round, might overflow to inf, this is OK
+    }
+  }
+
+  o.s.Sign = f.s.Sign;
+
+  return (*reinterpret_cast<const uint16_t *>(&o));
+}
 
 }  // namespace detail
 
@@ -3219,8 +3311,8 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
     return false;
   }
 
-  std::unordered_map<std::string, tensor_t> tensors;
-  std::unordered_map<std::string, std::string> metadata;
+  std::map<std::string, tensor_t> tensors;
+  std::map<std::string, std::string> metadata;
 
   // root element must be dict.
   if (auto po = v.as<minijson::object>()) {
@@ -3257,14 +3349,189 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
   st->tensors = std::move(tensors);
   st->metadata = std::move(metadata);
 
+  size_t databuffer_size = nbytes - header_size - 8;
+
   st->storage.resize(nbytes);
-  memcpy(st->storage.data(), addr, nbytes);
+  memcpy(st->storage.data(), addr + 8 + header_size, nbytes);
 
   st->mmaped = false;
-  st->mmap_addr = nullptr;
+  st->mmap_addr = addr + 8 + header_size;
   st->mmap_size = 0;
 
   return true;
+}
+
+float bfloat16_to_float(uint16_t x) { return detail::bfloat16_to_float(x); }
+
+uint16_t float_to_bfloat16(float x) { return detail::float_to_bfloat16(x); }
+
+float fp16_to_float(uint16_t x) {
+  detail::float16le src;
+  src.u = x;
+  return detail::half_to_float_le(src);
+}
+
+uint16_t float_to_fp16(float x) { return detail::float_to_half_full_le(x); }
+
+size_t get_dtype_bytes(const safetensors::dtype dtype) {
+  size_t sz = 0;
+
+  switch (dtype) {
+    case safetensors::dtype::kBOOL:
+      // Original Rust implementaion uses 1.
+      sz = 1;
+      break; 
+    case safetensors::dtype::kUINT8:
+      sz = 1;
+      break;
+    case safetensors::dtype::kINT8:
+      sz = 1;
+      break;
+    case safetensors::dtype::kUINT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kINT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kINT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kUINT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kFLOAT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kBFLOAT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kFLOAT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kFLOAT64:
+      sz = 8;
+      break;
+    case safetensors::dtype::kINT64:
+      sz = 8;
+      break;
+    case safetensors::dtype::kUINT64:
+      sz = 8;
+      break;
+  }
+
+  return sz;
+}
+
+std::string get_dtype_str(const safetensors::dtype dtype) {
+  switch (dtype) {
+    case safetensors::dtype::kBOOL:
+      return "BOOL";
+    case safetensors::dtype::kUINT8:
+      return "U8";
+    case safetensors::dtype::kINT8:
+      return "I8";
+    case safetensors::dtype::kUINT16:
+      return "U16";
+    case safetensors::dtype::kINT16:
+      return "I16";
+    case safetensors::dtype::kINT32:
+      return "I32";
+    case safetensors::dtype::kUINT32:
+      return "U32";
+    case safetensors::dtype::kFLOAT16:
+      return "F16";
+    case safetensors::dtype::kBFLOAT16:
+      return "BF16";
+    case safetensors::dtype::kFLOAT32:
+      return "F32";
+    case safetensors::dtype::kFLOAT64:
+      return "F64";
+    case safetensors::dtype::kINT64:
+      return "I64";
+    case safetensors::dtype::kUINT64:
+      return "U64";
+  }
+}
+
+// Empty Tensor returns 0.
+// Zero-rank Tensor reuturns 1(scalar)
+size_t get_shape_size(const tensor_t &t) {
+  if (t.shape.empty()) {
+    return 1;
+  }
+
+  if (t.shape.size() >= kMaxDim) {  // invalid ndim
+    return 0;
+  }
+
+  size_t sz = 1;
+
+  for (size_t i = 0; i < t.shape.size(); i++) {
+    sz *= t.shape[i];
+  }
+
+  return sz;
+}
+
+bool validate_data_offsets(const safetensors_t &st, std::string &err) {
+  bool valid{true};
+
+  std::stringstream ss;
+
+  size_t datasize;
+  if (st.mmaped) {
+    datasize = st.mmap_size;
+  } else {
+    datasize = st.storage.size();
+  }
+
+  for (const auto &item : st.tensors) {
+    const tensor_t &tensor = item.second;
+
+    if (tensor.data_offsets[0] > tensor.data_offsets[1]) {
+      ss << item.first << ".data_offsets.BEGIN " << tensor.data_offsets[0]
+         << " must be less than or equal to data_offsets.END "
+         << tensor.data_offsets[1] << "\n";
+      valid = false;
+    }
+
+    size_t tensor_size = get_dtype_bytes(tensor.dtype) * get_shape_size(tensor);
+
+    if (tensor_size == 0) {
+      // OK
+      continue;
+    }
+
+    // data_offsets are absolute offset from the databuffer(file)
+    if (tensor.data_offsets[0] > datasize) {
+      ss << "Tensor `" << item.first << "`.data_offset.BEGIN "
+         << tensor.data_offsets[0] << " exceeds input data size " << datasize
+         << ".\n";
+      valid = false;
+    }
+
+    if (tensor.data_offsets[1] > datasize) {
+      ss << "Tensor `" << item.first << "`.data_offset.END "
+         << tensor.data_offsets[1] << " exceeds input data size " << datasize
+         << ".\n";
+      valid = false;
+    }
+
+    size_t data_size = tensor.data_offsets[1] - tensor.data_offsets[0];
+
+    if (tensor_size != data_size) {
+      ss << "Data size mismatch. The size in Tensor `" << item.first << "` is "
+         << tensor_size << ", but the size from data_offsets is " << data_size
+         << "\n";
+      valid = false;
+    }
+  }
+
+  if (!valid) {
+    err = ss.str();
+  }
+
+  return valid;
 }
 
 }  // namespace safetensors
