@@ -23,9 +23,6 @@ extern AAssetManager *asset_manager;
 
 namespace safetensors {
 
-// Max JSON size
-constexpr size_t kMaxJSONSize = 1024ull * 1024ull * 64ull;
-
 constexpr size_t kMaxDim = 8; // must be equal to SAFETENSORS_C_MAX_DIM in `safetensors-c.h`
 
 enum dtype {
@@ -53,12 +50,12 @@ struct tensor_t {
 struct safetensors_t {
   std::unordered_map<std::string, tensor_t> tensors;
   std::unordered_map<std::string, std::string> metadata;
-  std::vector<uint8_t> stoage;  // empty when mmap'ed
+  std::vector<uint8_t> storage;  // empty when mmap'ed
 
   const uint8_t *mmap_addr{nullptr};
   size_t mmap_size{0};
 
-  bool mmapped{false};
+  bool mmaped{false};
 };
 
 //
@@ -2387,6 +2384,9 @@ char *to_chars(char *first, const char *last, double value) {
 
 namespace safetensors {
 
+// Max header(JSON) size. 100 MB as done in original safetensors implementation.
+constexpr size_t kMaxJSONSize = 1024ull * 1024ull * 100ull;
+
 namespace detail {
 
 bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
@@ -2496,6 +2496,14 @@ bool parse_metadata(
     minijson::object::const_iterator i;
     for (i = po->begin(); i != po->end(); i++) {
       if (auto so = i->second.as<std::string>()) {
+
+        if (dst.count(i->first)) {
+          if (err) {
+            (*err) += "Duplicate key `" + i->first + "` found in __metadata__.\n";
+          }
+          return false;
+        }
+
         dst[i->first] = *so;
       } else {
         if (err) {
@@ -2756,6 +2764,27 @@ bool parse_tensor(
   return true;
 }
 
+bool validate_data_offsets(
+  const safetensors_t &st,
+  const size_t databuffer_size,
+  std::string &err) {
+
+  bool valid = false;
+  std::stringstream ss;
+
+  for (const auto &tensor : st.tensors) {
+    if (tensor.second.data_offsets[0] > tensor.second.data_offsets[1]) {
+      ss << tensor.first << ".data_offsets.BEGIN " << tensor.second.data_offsets[0] << " must be less than or equal to data_offsets.END " << tensor.second.data_offsets[1] << "\n";
+    }
+  }
+
+  err += ss.str();
+
+
+  return valid;
+}
+  
+
 }  // namespace detail
 
 //
@@ -2825,6 +2854,7 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
     return false;
   }
 
+  std::unordered_map<std::string, tensor_t> tensors;
   std::unordered_map<std::string, std::string> metadata;
 
   // root element must be dict.
@@ -2832,12 +2862,25 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
     minijson::object::const_iterator i;
     for (i = po->begin(); i != po->end(); i++) {
       if (i->first == "__metadata__") {
-        if (!parse_metadata(i->second, metadata, err)) {
+        if (!detail::parse_metadata(i->second, metadata, err)) {
           return false;
         }
       } else {
         // tensor
-        i->first;
+
+        if (tensors.count(i->first)) {
+          if (err) {
+            (*err) += "Duplicate key `" + i->first + "` found.\n";
+          }
+          return false;
+        }
+
+        tensor_t tensor;
+        if (!detail::parse_tensor(i->first, i->second, tensor, err)) {
+          return false;
+        }
+
+        tensors[i->first] = std::move(tensor);
       }
     }
   } else {
@@ -2847,9 +2890,14 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
   }
 
   st->tensors = std::move(tensors);
-  st->metadata = std::mvoe(metadata);
+  st->metadata = std::move(metadata);
 
+  st->storage.resize(nbytes);
+  memcpy(st->storage.data(), addr, nbytes);
 
+  st->mmaped = false;
+  st->mmap_addr = nullptr;
+  st->mmap_size = 0;
 
   return true;
 }
