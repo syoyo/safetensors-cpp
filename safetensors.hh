@@ -4,10 +4,10 @@
 // https://gist.github.com/Narsil/5d6bf307995158ad2c4994f323967284
 #pragma once
 
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <array>
 
 #ifdef __ANDROID__
 #ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
@@ -42,7 +42,7 @@ enum dtype {
 };
 
 struct tensor_t {
-  dtype dtype;
+  safetensors::dtype dtype;
   std::vector<size_t> shape;
   std::array<size_t, 2> data_offsets;
 };
@@ -64,8 +64,10 @@ struct safetensors_t {
 //
 // @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
-// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
-// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
 //
 // @return true upon success. `err` will be filled when false.
 bool load_from_file(const std::string &filename, safetensors_t *st,
@@ -79,8 +81,10 @@ bool load_from_file(const std::string &filename, safetensors_t *st,
 // @param[in] nbytes The size in bytes.
 // @param[in] filename Filename of corresponding memory data. Can be empty.
 // @param[out] st safetensors data.
-// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
-// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
 //
 // @return true upon success. `err` will be filled when false.
 //
@@ -95,8 +99,10 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 //
 // @param[in] filename Filepath. Assume UTF-8 filepath.
 // @param[out] st safetensors data.
-// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
-// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
 //
 // @return true upon success. `err` will be filled when false.
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
@@ -104,15 +110,17 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
 
 //
 // Load safetensors with memory mapping(i.e. zero-copy).
-// Tensor data is not copied to `safetensors_t` object, thus the app must not free
-// `addr` until `safetensor_t` object is live.
+// Tensor data is not copied to `safetensors_t` object, thus the app must not
+// free `addr` until `safetensor_t` object is live.
 //
 // @param[in] addr Memory address of safetensors data.
 // @param[in] nbytes The size in bytes.
 // @param[in] filename Filename of corresponding memory data. Can be empty.
 // @param[out] st safetensors data.
-// @param[out] warn Warning message buffer(can be nullptr if you don't need warning message)
-// @param[out] err Error message buffer(can be nullptr if you don't need error message)
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
 //
 // @return true upon success. `err` will be filled when false.
 bool mmap_from_memory(const std::string &filename, safetensors_t *st,
@@ -125,6 +133,28 @@ bool mmap_from_memory(const std::string &filename, safetensors_t *st,
 #include <cstring>
 #include <fstream>
 #include <memory>
+
+#ifdef __has_include
+#if __has_include(<unistd.h>)
+#include <unistd.h>
+#if defined(_POSIX_MAPPED_FILES)
+#include <sys/mman.h>
+#endif
+#if defined(_POSIX_MEMLOCK_RANGE)
+#include <sys/resource.h>
+#endif
+#endif
+#endif
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h>
+#include <stdio.h>  // for _fseeki64
+#include <windows.h>
+#endif
 
 #if !defined(MINIJSON_IMPLEMENTATION)
 #define MINIJSON_IMPLEMENTATION
@@ -197,7 +227,7 @@ class value;
 
 typedef bool boolean;
 typedef double number;
-//typedef std::string string;
+// typedef std::string string;
 typedef std::map<std::string, value> object;
 typedef std::vector<value> array;
 typedef struct {
@@ -271,7 +301,9 @@ class value {
   value(boolean b) : t(boolean_type), u() { u.b = b; }
   value(number d) : t(boolean_type), u() { u.d = d; }
   value(const char *s) : t(string_type), u() { u.s = new std::string(s); }
-  value(const std::string &s) : t(string_type), u() { u.s = new std::string(s); }
+  value(const std::string &s) : t(string_type), u() {
+    u.s = new std::string(s);
+  }
   value(const array &a) : t(array_type), u() { u.a = new array(a); }
   value(const object &o) : t(object_type), u() { u.o = new object(o); }
   value(const value &v) : t(v.t), u() {
@@ -328,27 +360,33 @@ class value {
 
   template <typename T>
   const T *as() const {
-    if ((t == array_type) && (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
+    if ((t == array_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
       return reinterpret_cast<const T *>(u.a);
     }
 
-    if ((t == object_type) && (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
+    if ((t == object_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
       return reinterpret_cast<const T *>(u.o);
     }
 
-    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<std::string>::type_id())) {
+    if ((t == string_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<std::string>::type_id())) {
       return reinterpret_cast<const T *>(u.s);
     }
 
-    if ((t == null_type) && (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
+    if ((t == null_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
       return reinterpret_cast<const T *>(&u.n);
     }
 
-    if ((t == boolean_type) && (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
+    if ((t == boolean_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
       return reinterpret_cast<const T *>(&u.b);
     }
 
-    if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
+    if ((t == number_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
       return reinterpret_cast<const T *>(&u.d);
     }
 
@@ -444,7 +482,7 @@ class value {
       return "array";
     }
 
-    if (t == object_type){
+    if (t == object_type) {
       return "object";
     }
 
@@ -500,8 +538,8 @@ class value {
     } else if (const array *pa = as<array>()) {
       array::const_iterator i;
       ss << "[";
-      //array a = get<array>();
-      for (i = pa->begin(); i !=pa->end(); i++) {
+      // array a = get<array>();
+      for (i = pa->begin(); i != pa->end(); i++) {
         if (i != pa->begin()) ss << ", ";
         ss << i->str();
       }
@@ -509,7 +547,7 @@ class value {
     } else if (auto po = as<object>()) {
       object::const_iterator i;
       ss << "{";
-      //object o = get<object>();
+      // object o = get<object>();
       for (i = po->begin(); i != po->end(); i++) {
         if (i != po->begin()) ss << ", ";
         ss << str(i->first.c_str());
@@ -2389,6 +2427,27 @@ constexpr size_t kMaxJSONSize = 1024ull * 1024ull * 100ull;
 
 namespace detail {
 
+#ifdef _WIN32
+std::wstring UTF8ToWchar(const std::string &str) {
+  int wstr_size =
+      MultiByteToWideChar(CP_UTF8, 0, str.data(), int(str.size()), nullptr, 0);
+  std::wstring wstr(size_t(wstr_size), 0);
+  MultiByteToWideChar(CP_UTF8, 0, str.data(), int(str.size()), &wstr[0],
+                      int(wstr.size()));
+  return wstr;
+}
+
+std::string WcharToUTF8(const std::wstring &wstr) {
+  int str_size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), int(wstr.size()),
+                                     nullptr, 0, nullptr, nullptr);
+  std::string str(size_t(str_size), 0);
+  WideCharToMultiByte(CP_UTF8, 0, wstr.data(), int(wstr.size()), &str[0],
+                      int(str.size()), nullptr, nullptr);
+  return str;
+}
+#endif
+
+
 bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
                    const std::string &filepath, void *) {
 #ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
@@ -2487,11 +2546,9 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 #endif
 }
 
-bool parse_metadata(
-  const minijson::value &v,
-  std::unordered_map<std::string, std::string> &dst,
-  std::string *err) {
-
+bool parse_metadata(const minijson::value &v,
+                    std::unordered_map<std::string, std::string> &dst,
+                    std::string *err) {
   if (auto po = v.as<minijson::object>()) {
     minijson::object::const_iterator i;
     for (i = po->begin(); i != po->end(); i++) {
@@ -2507,7 +2564,8 @@ bool parse_metadata(
         dst[i->first] = *so;
       } else {
         if (err) {
-          (*err) += "`" + i->first + "` must be string type, but got " + i->second.type_name() + ".\n";
+          (*err) += "`" + i->first + "` must be string type, but got " +
+                    i->second.type_name() + ".\n";
         }
         return false;
       }
@@ -2522,10 +2580,8 @@ bool parse_metadata(
   return true;
 }
 
-bool parse_dtype(const minijson::value &v,
-  safetensors::dtype &dtype,
-  std::string *err) {
-
+bool parse_dtype(const minijson::value &v, safetensors::dtype &dtype,
+                 std::string *err) {
   if (auto so = v.as<std::string>()) {
     if ((*so) == "BOOL") {
       dtype = safetensors::dtype::kBOOL;
@@ -2561,18 +2617,17 @@ bool parse_dtype(const minijson::value &v,
     }
   } else {
     if (err) {
-      (*err) += "`dtype` item should be string type but got " + v.type_name() + ".\n";
+      (*err) +=
+          "`dtype` item should be string type but got " + v.type_name() + ".\n";
     }
     return false;
   }
 
   return true;
-
 }
 
-bool parse_shape(const minijson::value &v,
-  std::vector<size_t> &dst, std::string *err) {
-
+bool parse_shape(const minijson::value &v, std::vector<size_t> &dst,
+                 std::string *err) {
   // NOTE:
   // - Empty tensors (tensors with 1 dimension being 0) are allowed
   // - [] is allowed(0-Rank tensor = merely a scalar
@@ -2581,12 +2636,12 @@ bool parse_shape(const minijson::value &v,
     minijson::array::const_iterator i;
 
     for (i = pa->begin(); i != pa->end(); i++) {
-
       if (auto pn = i->as<minijson::number>()) {
-
         if (dst.size() >= kMaxDim) {
           if (err) {
-            (*err) += "`shape` length must be less than " + std::to_string(kMaxDim) + " but got " + std::to_string(dst.size()) + ".\n";
+            (*err) += "`shape` length must be less than " +
+                      std::to_string(kMaxDim) + " but got " +
+                      std::to_string(dst.size()) + ".\n";
           }
           return false;
         }
@@ -2595,16 +2650,16 @@ bool parse_shape(const minijson::value &v,
 
       } else {
         if (err) {
-          (*err) += "Array item in `shape` must be number type, but got " + i->type_name() + ".\n";
+          (*err) += "Array item in `shape` must be number type, but got " +
+                    i->type_name() + ".\n";
         }
         return false;
       }
-
     }
   } else {
-
     if (err) {
-      (*err) += "`shape` value must be JSON array, but got " + v.type_name() + ".\n";
+      (*err) +=
+          "`shape` value must be JSON array, but got " + v.type_name() + ".\n";
     }
     return false;
   }
@@ -2612,17 +2667,14 @@ bool parse_shape(const minijson::value &v,
   return true;
 }
 
-bool parse_data_offsets(const minijson::value &v,
-  std::array<size_t, 2> &dst, std::string *err) {
-
+bool parse_data_offsets(const minijson::value &v, std::array<size_t, 2> &dst,
+                        std::string *err) {
   if (auto pa = v.as<minijson::array>()) {
     minijson::array::const_iterator i;
     size_t cnt = 0;
 
     for (i = pa->begin(); i != pa->end(); i++) {
-
       if (auto pn = i->as<minijson::number>()) {
-
         if (cnt >= 2) {
           if (err) {
             (*err) += "`data_offsets` length must be 2.\n";
@@ -2636,11 +2688,12 @@ bool parse_data_offsets(const minijson::value &v,
 
       } else {
         if (err) {
-          (*err) += "Array item in `data_offsets` must be number type, but got " + i->type_name() + ".\n";
+          (*err) +=
+              "Array item in `data_offsets` must be number type, but got " +
+              i->type_name() + ".\n";
         }
         return false;
       }
-
     }
 
     if (cnt != 2) {
@@ -2650,9 +2703,9 @@ bool parse_data_offsets(const minijson::value &v,
       return false;
     }
   } else {
-
     if (err) {
-      (*err) += "`data_offsets` value must be JSON array, but got " + v.type_name() + ".\n";
+      (*err) += "`data_offsets` value must be JSON array, but got " +
+                v.type_name() + ".\n";
     }
     return false;
   }
@@ -2660,12 +2713,8 @@ bool parse_data_offsets(const minijson::value &v,
   return true;
 }
 
-bool parse_tensor(
-  const std::string &name,
-  const minijson::value &v,
-  tensor_t &tensor,
-  std::string *err) {
-
+bool parse_tensor(const std::string &name, const minijson::value &v,
+                  tensor_t &tensor, std::string *err) {
   if (auto po = v.as<minijson::object>()) {
     minijson::object::const_iterator i;
 
@@ -2679,21 +2728,18 @@ bool parse_tensor(
 
     for (i = po->begin(); i != po->end(); i++) {
       if (i->first == "dtype") {
-
         if (!parse_dtype(i->second, dtype, err)) {
           return false;
         }
 
         dtype_found = true;
       } else if (i->first == "shape") {
-
         if (!parse_shape(i->second, shape, err)) {
           return false;
         }
 
         shape_found = true;
       } else if (i->first == "data_offsets") {
-
         if (!parse_data_offsets(i->second, data_offsets, err)) {
           return false;
         }
@@ -2719,8 +2765,7 @@ bool parse_tensor(
     }
 
     bool is_empty_tensor{false};
-    if ((shape.size() > 0))
-    {
+    if ((shape.size() > 0)) {
       for (size_t i = 0; i < shape.size(); i++) {
         if (shape[i] == 0) {
           is_empty_tensor = true;
@@ -2730,24 +2775,25 @@ bool parse_tensor(
     }
 
     if (is_empty_tensor) {
-      // They are not storing any data in the databuffer, yet retaining size in the header.
-      // So ignore data_offsets
+      // They are not storing any data in the databuffer, yet retaining size in
+      // the header. So ignore data_offsets
       if (data_offsets_found) {
         // TODO: make this warn instead of err?
         if (err) {
-          (*err) += "`" + name + "` is empty tensors(tensors with 1 dimension being 0), and no data in databuffer, but `data_offsets` item is provided.\n";
+          (*err) +=
+              "`" + name +
+              "` is empty tensors(tensors with 1 dimension being 0), and no "
+              "data in databuffer, but `data_offsets` item is provided.\n";
         }
         return false;
       }
     } else {
-
       if (!data_offsets_found) {
         if (err) {
           (*err) += "`" + name + "` does not have `data_offsets` item.\n";
         }
         return false;
       }
-
     }
 
     tensor.dtype = dtype;
@@ -2764,26 +2810,342 @@ bool parse_tensor(
   return true;
 }
 
-bool validate_data_offsets(
-  const safetensors_t &st,
-  const size_t databuffer_size,
-  std::string &err) {
+size_t get_dtype_size(const safetensors::dtype &dtype) {
+  size_t sz = 0;
 
-  bool valid = false;
+  switch (dtype) {
+    case safetensors::dtype::kBOOL:
+      sz = 1;
+      break;  // FIXME: 1bit?
+    case safetensors::dtype::kUINT8:
+      sz = 1;
+      break;
+    case safetensors::dtype::kINT8:
+      sz = 1;
+      break;
+    case safetensors::dtype::kUINT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kINT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kINT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kUINT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kFLOAT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kBFLOAT16:
+      sz = 2;
+      break;
+    case safetensors::dtype::kFLOAT32:
+      sz = 4;
+      break;
+    case safetensors::dtype::kFLOAT64:
+      sz = 8;
+      break;
+    case safetensors::dtype::kINT64:
+      sz = 8;
+      break;
+    case safetensors::dtype::kUINT64:
+      sz = 8;
+      break;
+  }
+
+  return sz;
+}
+
+// Empty Tensor returns 0.
+size_t get_shape_size(const tensor_t &t) {
+  size_t sz = 1;
+
+  if (t.shape.size() >= kMaxDim) {  // invalid ndim
+    return 0;
+  }
+
+  for (size_t i = 0; i < t.shape.size(); i++) {
+    sz *= t.shape[i];
+  }
+
+  return sz;
+}
+
+bool validate_data_offsets(const safetensors_t &st, const size_t datasize,
+                           std::string &err) {
+  bool valid{true};
+
   std::stringstream ss;
 
-  for (const auto &tensor : st.tensors) {
-    if (tensor.second.data_offsets[0] > tensor.second.data_offsets[1]) {
-      ss << tensor.first << ".data_offsets.BEGIN " << tensor.second.data_offsets[0] << " must be less than or equal to data_offsets.END " << tensor.second.data_offsets[1] << "\n";
+  for (const auto &item : st.tensors) {
+
+    const tensor_t &tensor = item.second;
+
+    if (tensor.data_offsets[0] > tensor.data_offsets[1]) {
+      ss << item.first << ".data_offsets.BEGIN " << tensor.data_offsets[0] << " must be less than or equal to data_offsets.END " << tensor.data_offsets[1] << "\n";
+      valid = false;
+    }
+
+    size_t tensor_size = get_dtype_size(tensor.dtype) * get_shape_size(tensor);
+
+    // data_offsets are absolute offset from the databuffer(file)
+    if (tensor.data_offsets[0] > datasize) {
+      ss << "Tensor `" << item.first << "`.data_offset.BEGIN "
+         << tensor.data_offsets[0] << " exceeds input data size " << datasize
+         << ".\n";
+      valid = false;
+    }
+
+    if (tensor.data_offsets[1] > datasize) {
+      ss << "Tensor `" << item.first << "`.data_offset.END "
+         << tensor.data_offsets[1] << " exceeds input data size " << datasize
+         << ".\n";
+      valid = false;
+    }
+
+    size_t data_size = tensor.data_offsets[1] - tensor.data_offsets[0];
+
+    if (tensor_size != data_size) {
+      ss << "Data size mismatch. The size in Tensor `" << item.first << "` is "
+         << tensor_size << ", but the size from data_offsets is " << data_size
+         << "\n";
+      valid = false;
     }
   }
 
-  err += ss.str();
-
+  if (!valid) {
+    err = ss.str();
+  }
 
   return valid;
 }
-  
+
+// From llama.cpp
+#if defined(_WIN32)
+static std::string safetensors_format_win_err(DWORD err) {
+  LPSTR buf;
+  size_t size = FormatMessageA(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+          FORMAT_MESSAGE_IGNORE_INSERTS,
+      NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buf, 0,
+      NULL);
+  if (!size) {
+    return "FormatMessageA failed";
+  }
+  std::string ret(buf, size);
+  LocalFree(buf);
+  return ret;
+}
+#endif
+
+struct safetensors_file {
+  // use FILE * so we don't have to re-open the file to mmap
+  FILE *fp{nullptr};
+  size_t size{0};
+  mutable bool _valid{false};
+  std::string _err;
+
+  safetensors_file(const char *fname, const char *mode) {
+    fp = std::fopen(fname, mode);
+    if (fp == nullptr) {
+      _err = "failed to open " + std::string(fname) + ":" +
+             std::string(strerror(errno)) + "\n";
+      _valid = false;
+    } else {
+      seek(0, SEEK_END);
+      size = tell();
+      seek(0, SEEK_SET);
+      _valid = true;
+    }
+  }
+
+  size_t tell() const {
+#ifdef _WIN32
+    __int64 ret = _ftelli64(fp);
+#else
+    long ret = std::ftell(fp);
+#endif
+    if (ret == -1) {
+      // this really shouldn't fail
+      _valid = false;
+      return 0;
+    }
+
+    return (size_t)ret;
+  }
+
+  void seek(size_t offset, int whence) const {
+#ifdef _WIN32
+    int ret = _fseeki64(fp, (__int64)offset, whence);
+#else
+    int ret = std::fseek(fp, (long)offset, whence);
+#endif
+    if (ret == 0) {
+      _valid = false;
+    }
+  }
+
+  bool &is_valid() const { return _valid; }
+
+  const std::string &get_error() const { return _err; }
+};
+
+struct safetensors_mmap {
+  uint8_t *addr{nullptr};
+  size_t size{0};
+
+  bool _valid{false};
+  std::string _warn;
+  std::string _err;
+
+  const bool is_valid() const { return _valid; }
+
+  const std::string &get_error() const { return _err; }
+
+  const std::string &get_warning() const { return _warn; }
+
+  safetensors_mmap(const safetensors_mmap &) = delete;
+
+#ifdef _POSIX_MAPPED_FILES
+  static constexpr bool SUPPORTED = true;
+
+  safetensors_mmap(struct safetensors_file *file,
+                   size_t prefetch = (size_t)-1 /* -1 = max value */,
+                   bool numa = false) {
+    size = file->size;
+    int fd = fileno(file->fp);
+    int flags = MAP_SHARED;
+    // prefetch/readahead impairs performance on NUMA systems
+    if (numa) {
+      prefetch = 0;
+    }
+#ifdef __linux__
+    if (prefetch) {
+      flags |= MAP_POPULATE;
+    }
+#endif
+    addr = reinterpret_cast<uint8_t *>(
+        mmap(NULL, file->size, PROT_READ, flags, fd, 0));
+    if (addr == MAP_FAILED) {
+      _valid = false;
+      _err = "mmap failed: " + std::string(strerror(errno)) + "\n";
+
+      size = 0;
+      addr = nullptr;
+
+      return;
+    }
+
+    if (prefetch > 0) {
+      // Advise the kernel to preload the mapped memory
+      if (posix_madvise(addr, std::min(file->size, prefetch),
+                        POSIX_MADV_WILLNEED)) {
+        _warn += "posix_madvise(.., POSIX_MADV_WILLNEED) failed: " +
+                 std::string(strerror(errno)) + "\n";
+      }
+    }
+    if (numa) {
+      // advise the kernel not to use readahead
+      // (because the next page might not belong on the same node)
+      if (posix_madvise(addr, file->size, POSIX_MADV_RANDOM)) {
+        _warn += "posix_madvise(.., POSIX_MADV_RANDOM) failed: " +
+                 std::string(strerror(errno)) + "\n";
+      }
+    }
+
+    _valid = true;
+  }
+
+  ~safetensors_mmap() {
+    if (_valid) {
+      munmap(addr, size);
+    }
+    size = 0;
+    addr = nullptr;
+    _valid = false;
+  }
+
+#elif defined(_WIN32)
+  static constexpr bool SUPPORTED = true;
+
+  safetensors_mmap(struct safetensors_file *file, bool prefetch = true,
+                   bool numa = false) {
+    (void)numa;
+
+    size = file->size;
+
+    HANDLE hFile = (HANDLE)_get_osfhandle(_fileno(file->fp));
+
+    HANDLE hMapping =
+        CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    DWORD error = GetLastError();
+
+    if (hMapping == NULL) {
+      // TODO: get error message
+      _err = "CreateFileMappingA failed: " + safetensors_format_win_err(error) +
+             "\n";
+      _valid = false;
+      size = 0;
+      addr = nullptr;
+      return;
+    }
+
+    addr = reinterpret_cast<uint8_t *>(MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0));
+    error = GetLastError();
+    CloseHandle(hMapping);
+
+    if (addr == NULL) {
+      _err = "MapViewOfFile failed: " + safetensors_format_win_err(error) + "\n";
+    }
+
+    if (prefetch) {
+      // PrefetchVirtualMemory is only present on Windows 8 and above, so we
+      // dynamically load it
+      BOOL(WINAPI * pPrefetchVirtualMemory)
+      (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+      HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+
+      // may fail on pre-Windows 8 systems
+      pPrefetchVirtualMemory =
+          reinterpret_cast<decltype(pPrefetchVirtualMemory)>(
+              GetProcAddress(hKernel32, "PrefetchVirtualMemory"));
+
+      if (pPrefetchVirtualMemory) {
+        // advise the kernel to preload the mapped memory
+        WIN32_MEMORY_RANGE_ENTRY range;
+        range.VirtualAddress = addr;
+        range.NumberOfBytes = (SIZE_T)size;
+        if (!pPrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) {
+          _warn += "PrefetchVirtualMemory failed: " +
+                   safetensors_format_win_err(GetLastError()) + "\n";
+        }
+      }
+    }
+  }
+  ~safetensors_mmap() {
+    if (!UnmapViewOfFile(addr)) {
+      _warn += "UnmapViewOfFile failed: " +
+               safetensors_format_win_err(GetLastError()) + "\n";
+    }
+  }
+#else
+  static constexpr bool SUPPORTED = false;
+
+  safetensors_mmap(struct safetensors_file *file, bool prefetch = true,
+                   bool numa = false) {
+    (void)file;
+    (void)prefetch;
+    (void)numa;
+
+    _valid = false;
+    _err = "mmap not supported\n";
+    addr = nullptr;
+    size = 0;
+  }
+#endif
+};
 
 }  // namespace detail
 
@@ -2800,12 +3162,13 @@ bool load_from_file(const std::string &filename, safetensors_t *st,
     return false;
   }
 
-  return load_from_memory(reinterpret_cast<const uint8_t *>(data.data()), data.size(), filename, st, warn, err);
+  return load_from_memory(reinterpret_cast<const uint8_t *>(data.data()),
+                          data.size(), filename, st, warn, err);
 }
 
-bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::string &filename, safetensors_t *st,
-                    std::string *warn, std::string *err) {
-
+bool load_from_memory(const uint8_t *addr, const size_t nbytes,
+                      const std::string &filename, safetensors_t *st,
+                      std::string *warn, std::string *err) {
   if (nbytes < 16) {
     if (err) {
       (*err) += "Size is too short.\n";
@@ -2826,14 +3189,16 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
 
   if ((8 + header_size) > nbytes) {
     if (err) {
-      (*err) += "Header size " + std::to_string(header_size) + " + 8 exceeds input size " + std::to_string(nbytes) + " .\n";
+      (*err) += "Header size " + std::to_string(header_size) +
+                " + 8 exceeds input size " + std::to_string(nbytes) + " .\n";
     }
     return false;
   }
 
   if (header_size > kMaxJSONSize) {
     if (err) {
-      (*err) += "Header JSON size exceeds the limit(" + std::to_string(kMaxJSONSize) + ").\n";
+      (*err) += "Header JSON size exceeds the limit(" +
+                std::to_string(kMaxJSONSize) + ").\n";
     }
     return false;
   }

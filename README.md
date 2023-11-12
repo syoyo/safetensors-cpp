@@ -36,3 +36,4 @@ MIT license
 
 * minijson(included in `safetensors.hh`) : MIT license
 * Grisu2 : MIT license
+* llama.cpp(mmap feature) : MIT license.
