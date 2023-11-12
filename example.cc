@@ -1,6 +1,8 @@
 #include <iostream>
 
+#if !defined(SAFETENSORS_CPP_NO_IMPLEMENTATION)
 #define SAFETENSORS_CPP_IMPLEMENTATION
+#endif
 #include "safetensors.hh"
 
 int main(int argc, char **argv)

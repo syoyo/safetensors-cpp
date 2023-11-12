@@ -36,15 +36,14 @@ typedef enum safetensors_c_status {
   SAFETENSORS_C_FILE_WRITE_FAILURE = -3,
   SAFETENSORS_C_CORRUPTED_DATA = -4,
   SAFETENSORS_C_INVALID_SAFETENSORS = -5,
-  SAFETENSORS_C_MALLOC_ERROR= -6
+  SAFETENSORS_C_MALLOC_ERROR = -6,
+  SAFETENSORS_C_INVALID_ARGUMENT = -7,
+  SAFETENSORS_C_KEY_NOT_FOUND = -8
 } safetensors_c_status_t;
 
 typedef struct safetensors_c_safetensors {
-  void *tensors;   // opaque pointer to tensor dict.
-  void *metadata;  // opaque pointer to metadata dict.
-  int mmaped;
-  unsigned char *data;
-  size_t nbytes;
+  // opaque pointer to satetensors::safetensors_t
+  void *ptr;
 } safetensors_c_safetensors_t;
 
 typedef struct safetensors_c_tensor {
@@ -57,6 +56,10 @@ typedef struct safetensors_c_tensor {
 } safetensors_c_tensor_t;
 
 void safetensors_c_init(safetensors_c_safetensors_t *st);
+void safetensors_c_free(safetensors_c_safetensors_t *st);
+
+void safetensors_c_tensor_init(safetensors_c_tensor_t *t);
+void safetensors_c_tensor_free(safetensors_c_tensor_t *t);
 
 //
 // Load safetensors from a file.
@@ -69,8 +72,8 @@ void safetensors_c_init(safetensors_c_safetensors_t *st);
 // @return `SAFETENSORS_C_SUCCESS` upon success.
 //
 safetensors_c_status_t safetensors_c_load_from_file(
-    const char *filename, safetensors_c_safetensors_t *st, char *const *warn,
-    char *const *err);
+    const char *filename, safetensors_c_safetensors_t *st, char **warn,
+    char **err);
 
 //
 // Load safetensors from a memory
@@ -85,19 +88,19 @@ safetensors_c_status_t safetensors_c_load_from_file(
 // @return `SAFETENSORS_C_SUCCESS` upon success.
 //
 safetensors_c_status_t safetensors_c_load_from_memory(
-    const char *filename, safetensors_c_safetensors_t *st, char *const*warn,
-    char *const *err);
+    const void *addr, const size_t bytes, const char *filename,
+    safetensors_c_safetensors_t *st, char **warn, char **err);
 
 // mmap version
 // Still need to call `safetensors_c_safetensors_free` API to free JSON data in
 // safetensors struct.
 //
 safetensors_c_status_t safetensors_c_mmap_from_file(
-    const char *filename, safetensors_c_safetensors_t *st, char *const*warn,
-    char *const*err);
+    const char *filename, safetensors_c_safetensors_t *st, char **warn,
+    char **err);
 safetensors_c_status_t safetensors_c_mmap_from_memory(
-    const char *filename, safetensors_c_safetensors_t *st, char *const*warn,
-    char *const*err);
+    const char *filename, safetensors_c_safetensors_t *st, char **warn,
+    char **err);
 
 //
 // Fee memory of safetensors struct.
@@ -128,55 +131,204 @@ const char *safetensors_c_get_metadata(const safetensors_c_safetensors_t *st,
 #if defined(SAFETENSORS_C_IMPLEMENTATION)
 
 #if !defined(SAFETENSORS_CPP_NO_IMPLEMENTATION)
+#if !defined(SAFETENSORS_CPP_IMPLEMENTATION)
 #define SAFETENSORS_CPP_IMPLEMENTATION
 #endif
+#endif
 #include "safetensors.hh"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 void safetensors_c_init(safetensors_c_safetensors_t *st) {
   if (!st) {
     return;
   }
+  st->ptr = nullptr;
+}
 
-  st->dtype = SAFETENSORS_C_FLOAT32;
-  memset(st->shape, 0, sizeof(size_t) * SAFETENSORS_C_MAX_DIM);
-  st->ndim = 0;
-  st->mmaped = 0;
-  st->data = 0;
-  st->nbytes = 0;
+int safetensors_c_is_mmaped(
+  const safetensors_c_safetensors_t *st, int *is_mmaped) {
+
+  if (!st || !is_mmaped) {
+    return SAFETENSORS_C_INVALID_ARGUMENT;
+  }
+
+  if (!st->ptr) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
+
+  safetensors::safetensors_t *cppst = reinterpret_cast<safetensors::safetensors_t *>(st->ptr);
+
+  (*is_mmaped) = cppst->mmaped ? 1 : 0;
+
+  return SAFETENSORS_C_SUCCESS;
+
+}
+
+int safetensors_c_get_databuffer(
+  const safetensors_c_safetensors_t *st,
+  const void **addr, size_t *nbytes) {
+
+  if (!st || !addr || !nbytes) {
+    return SAFETENSORS_C_INVALID_ARGUMENT;
+  }
+
+  if (!st->ptr) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
+
+  safetensors::safetensors_t *cppst = reinterpret_cast<safetensors::safetensors_t *>(st->ptr);
+
+  if (cppst->mmaped) {
+    (*addr) = cppst->mmap_addr;
+    (*nbytes) = cppst->mmap_size;
+  } else {
+    (*addr) = reinterpret_cast<const void *>(cppst->storage.data());
+    (*nbytes) = cppst->storage.size();
+  }
+
+  return SAFETENSORS_C_SUCCESS;
+
+}
+
+int safetensors_c_has_tensor(const safetensors_c_safetensors_t *st,
+  const char *key,
+  int *has_tensor) {
+
+  if (!st || !key || !has_tensor) {
+    return SAFETENSORS_C_INVALID_ARGUMENT;
+  }
+
+  if (!st->ptr) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
+
+  safetensors::safetensors_t *cppst = reinterpret_cast<safetensors::safetensors_t *>(st->ptr);
+
+  (*has_tensor) = cppst->tensors.count(key) ? 1 : 0;
+
+  return SAFETENSORS_C_SUCCESS;
+}
+
+int safetensors_c_get_tensor(const safetensors_c_safetensors_t *st,
+  const char *key,
+  safetensors_c_tensor_t *tensor_out) {
+
+  if (!st || !key || !tensor_out) {
+    return SAFETENSORS_C_INVALID_ARGUMENT;
+  }
+
+  if (!st->ptr) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
+
+  safetensors::safetensors_t *cppst = reinterpret_cast<safetensors::safetensors_t *>(st->ptr);
+
+  if (!cppst->tensors.count(key)) {
+    return SAFETENSORS_C_KEY_NOT_FOUND;
+  }
+
+  auto &ts = cppst->tensors.at(key);
+
+  if (ts.shape.size() >= SAFETENSORS_C_MAX_DIM) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
+
 }
 
 safetensors_c_status_t safetensors_c_load_from_file(
-    const char *filename, safetensors_c_safetensors_t *st, char *const *warn,
-    char *const *err) {
+    const char *filename, safetensors_c_safetensors_t *st, char **warn,
+    char **err) {
+
+  if (!st) {
+    return SAFETENSORS_C_INVALID_ARGUMENT;
+  }
 
   safetensors_c_init(st);
 
-  std::string err;
-  const char *err_msg = malloc(err.size());
-  if (!err_msg) {
-    return SAFETENSORS_C_MALLOC_ERROR;
+  std::string _warn;
+  std::string _err;
+
+  // TODO: First check if file exists
+
+  safetensors::safetensors_t *cpp_st = new safetensors::safetensors_t();
+  if (!safetensors::load_from_file(filename, cpp_st, &_warn, &_err)) {
+
+    delete cpp_st;
+
+    if (_err.size()) {
+      char *err_msg = reinterpret_cast<char *>(malloc(_err.size()));
+      if (!err_msg) {
+        return SAFETENSORS_C_MALLOC_ERROR;
+      }
+
+      (*err) = err_msg;
+    }
+
+    return SAFETENSORS_C_FILE_READ_FAILURE;
   }
 
+  st->ptr = cpp_st;
+
+  return SAFETENSORS_C_SUCCESS;
 }
 
-int safetensors_c_free(safetensors_c_safetensors_t *st )
-{
+safetensors_c_status_t safetensors_c_load_from_memory(
+    const void *addr, const size_t nbytes, const char *filename,
+    safetensors_c_safetensors_t *st, char **warn, char **err) {
+
   if (!st) {
-    return 0;
+    return SAFETENSORS_C_INVALID_ARGUMENT;
   }
 
-  if (st->mmaped) {
-    return 1;
+  safetensors_c_init(st);
+
+  std::string _warn;
+  std::string _err;
+
+  // TODO: First check if file exists
+
+  safetensors::safetensors_t *cpp_st = new safetensors::safetensors_t();
+  if (!safetensors::load_from_memory(reinterpret_cast<const uint8_t *>(addr), nbytes, filename, cpp_st, &_warn, &_err)) {
+
+    delete cpp_st;
+
+    if (_err.size()) {
+      char *err_msg = reinterpret_cast<char *>(malloc(_err.size()));
+      if (!err_msg) {
+        return SAFETENSORS_C_MALLOC_ERROR;
+      }
+
+      (*err) = err_msg;
+    }
+
+    return SAFETENSORS_C_FILE_READ_FAILURE;
   }
 
-  if (st->data) {
-    free(st->data);
-    st->data = NULL;
-  }
+  st->ptr = cpp_st;
 
-  st->nbytes = 0;
-
+  return SAFETENSORS_C_SUCCESS;
 }
 
+void safetensors_c_free(safetensors_c_safetensors_t *st) {
+  if (!st) {
+    return;
+  }
+
+  safetensors::safetensors_t *p =
+      reinterpret_cast<safetensors::safetensors_t *>(st->ptr);
+
+  delete p;
+
+  st->ptr = nullptr;
+
+  return;
+}
+
+#ifdef __cplusplus
+}  // extern "C"
 #endif
 
+#endif
