@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 
 #if !defined(SAFETENSORS_CPP_NO_IMPLEMENTATION)
 #define SAFETENSORS_CPP_IMPLEMENTATION
