@@ -6,7 +6,7 @@ Code is tested with fuzzer.
 ## Features
 
 * [x] Load safetensors
-  * [x] mmap zero-copy load
+  * [ ] mmap zero-copy load
 * [ ] Save safetensors(TODO)
 * [x] BF16 and FP16 support
   * [x] BF16 <-> FLOAT conversion
