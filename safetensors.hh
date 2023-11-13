@@ -135,7 +135,7 @@ bool mmap_from_memory(const void *arr, const size_t nbytes, const std::string &f
 
 //
 // Utility functions
-// 
+//
 
 // Returns shape[0] * shape[1] * ...
 // Empty Tensor(any shape[i] is 0) returns 0.
@@ -3380,7 +3380,7 @@ size_t get_dtype_bytes(const safetensors::dtype dtype) {
     case safetensors::dtype::kBOOL:
       // Original Rust implementaion uses 1.
       sz = 1;
-      break; 
+      break;
     case safetensors::dtype::kUINT8:
       sz = 1;
       break;
@@ -3451,6 +3451,7 @@ std::string get_dtype_str(const safetensors::dtype dtype) {
     case safetensors::dtype::kUINT64:
       return "U64";
   }
+  return "???";
 }
 
 // Empty Tensor returns 0.

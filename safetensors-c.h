@@ -13,6 +13,7 @@ extern "C" {
 #define SAFETENSORS_C_MAX_DIM (8)
 
 typedef enum safetensors_c_dtype {
+  SAFETENSORS_C_DTYPE_INVALID,
   SAFETENSORS_C_BOOL,
   SAFETENSORS_C_UINT8,
   SAFETENSORS_C_INT8,
@@ -118,9 +119,11 @@ int safetensors_c_has_metadata(const safetensors_c_safetensors_t *st,
 ///
 /// Get metadata item for `key`. Return NULL when no corresponding metadata item
 /// exists for `key`.
+/// Memory will be allocated for `value`(even in mmap mode). Need to free `value` after using it.
 ///
 const char *safetensors_c_get_metadata(const safetensors_c_safetensors_t *st,
-                                       const char *key);
+                                       const char *key,
+                                       char **value);
 
 // TODO: Write API
 
@@ -136,6 +139,32 @@ const char *safetensors_c_get_metadata(const safetensors_c_safetensors_t *st,
 #endif
 #endif
 #include "safetensors.hh"
+
+namespace safetensors_c {
+namespace detail {
+
+safetensors_c_dtype_t convert_cpp_dtype(safetensors::dtype dtype) {
+  switch (dtype) {
+    case safetensors::dtype::kBOOL: return SAFETENSORS_C_BOOL;
+    case safetensors::dtype::kUINT8: return SAFETENSORS_C_UINT8;
+    case safetensors::dtype::kINT8: return SAFETENSORS_C_INT8;
+    case safetensors::dtype::kUINT16: return SAFETENSORS_C_UINT16;
+    case safetensors::dtype::kINT16: return SAFETENSORS_C_INT16;
+    case safetensors::dtype::kFLOAT16: return SAFETENSORS_C_FLOAT16;
+    case safetensors::dtype::kBFLOAT16: return SAFETENSORS_C_BFLOAT16;
+    case safetensors::dtype::kUINT32: return SAFETENSORS_C_UINT32;
+    case safetensors::dtype::kINT32: return SAFETENSORS_C_INT32;
+    case safetensors::dtype::kFLOAT32: return SAFETENSORS_C_FLOAT32;
+    case safetensors::dtype::kFLOAT64: return SAFETENSORS_C_FLOAT64;
+    case safetensors::dtype::kUINT64: return SAFETENSORS_C_UINT64;
+    case safetensors::dtype::kINT64: return SAFETENSORS_C_INT64;
+  }
+
+  return SAFETENSORS_C_DTYPE_INVALID;
+}
+
+}
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -236,6 +265,15 @@ int safetensors_c_get_tensor(const safetensors_c_safetensors_t *st,
     return SAFETENSORS_C_CORRUPTED_DATA;
   }
 
+  tensor_out->dtype = safetensors_c::detail::convert_cpp_dtype(ts.dtype);
+  tensor_out->ndim = ts.shape.size();
+  for (size_t i = 0; i < ts.shape.size(); i++) {
+    tensor_out->shape[i] = ts.shape[i];
+  }
+  tensor_out->data_offsets[0] = ts.data_offsets[0];
+  tensor_out->data_offsets[1] = ts.data_offsets[1];
+
+  return SAFETENSORS_C_SUCCESS;
 }
 
 safetensors_c_status_t safetensors_c_load_from_file(
@@ -326,6 +364,28 @@ void safetensors_c_free(safetensors_c_safetensors_t *st) {
 
   return;
 }
+
+void safetensors_c_tensor_init(safetensors_c_tensor_t *st) {
+  if (!st) {
+    return;
+  }
+
+  st->dtype = SAFETENSORS_C_DTYPE_INVALID;
+  memset(st->shape, 0, sizeof(size_t) * SAFETENSORS_C_MAX_DIM);
+  st->ndim = 0;
+  st->data_offsets[0] = 0;
+  st->data_offsets[1] = 0;
+}
+
+void safetensors_c_tensor_free(safetensors_c_tensor_t *st) {
+  if (!st) {
+    return;
+  }
+
+  // No members to free for tensor_t
+  return;
+}
+
 
 #ifdef __cplusplus
 }  // extern "C"
