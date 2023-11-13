@@ -38,6 +38,10 @@ if (SAFETENSORS_CPP_BUILD_EXAMPLES)
   target_compile_definitions(example PRIVATE "SAFETENSORS_CPP_NO_IMPLEMENTATION")
   target_link_libraries(example safetensors_cpp)
 
+  add_executable(serialize_example serialize-example.cc)
+  target_compile_definitions(serialize_example PRIVATE "SAFETENSORS_CPP_NO_IMPLEMENTATION")
+  target_link_libraries(serialize_example safetensors_cpp)
+
   if (SAFETENSORS_CPP_BUILD_C_API)
     add_executable(example-c example-c.c)
     target_compile_definitions(example-c PRIVATE "SAFETENSORS_C_NO_IMPLEMENTATION")

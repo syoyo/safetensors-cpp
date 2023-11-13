@@ -6,8 +6,11 @@ Code is tested with fuzzer.
 ## Features
 
 * [x] Load safetensors
-  * [ ] mmap zero-copy load
-* [ ] Save safetensors(TODO)
+  * Load from a file
+    * [ ] mmap zero-copy load
+  * Load from memory
+* [x] Save safetensors
+  * See [serialize-example.cc](serialize-example.cc) for details.
 * [x] BF16 and FP16 support
   * [x] BF16 <-> FLOAT conversion
     * Consider NaN, Inf properly.

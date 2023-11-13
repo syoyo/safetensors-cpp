@@ -134,6 +134,34 @@ bool mmap_from_memory(const void *arr, const size_t nbytes, const std::string &f
 #endif
 
 //
+// Save safetensors to file.
+//
+// @param[in] st safetensors data.
+// @param[in] filename Filepath. Assume UTF-8 filepath.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
+//
+// @return true upon success. `err` will be filled when false.
+bool save_to_file(const safetensors_t &st, const std::string &filename,
+                  std::string *warn, std::string *err);
+
+//
+// Save safetensors to memory.
+//
+// @param[in] st safetensors data.
+// @param[out] data_out Serialized safetensor data.
+// @param[out] warn Warning message buffer(can be nullptr if you don't need
+// warning message)
+// @param[out] err Error message buffer(can be nullptr if you don't need error
+// message)
+//
+// @return true upon success. `err` will be filled when false.
+bool save_to_memory(const std::string &filename, std::vector<uint8_t> *data_out,
+                  std::string *warn, std::string *err);
+
+//
 // Utility functions
 //
 
@@ -3236,7 +3264,7 @@ uint16_t float_to_half_full_le(float _f) {
 
   o.s.Sign = f.s.Sign;
 
-  return (*reinterpret_cast<const uint16_t *>(&o));
+  return o.u;
 }
 
 }  // namespace detail
@@ -3533,6 +3561,144 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
   }
 
   return valid;
+}
+
+bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
+                  std::string *warn, std::string *err) {
+
+  // directly serialize JSON string.
+  std::stringstream ss;
+
+  // NOTE: The last offset **must** be the end of the file,
+  // so write __metadata__ first(if metadata part exists)
+
+  std::string _err;
+  if (!validate_data_offsets(st, _err)) {
+    if (err) {
+      (*err) += "Invalid safensors is provided.\n";
+      (*err) += _err;
+    }
+    return false;
+  }
+
+  ss << "{";
+  if (st.metadata.size()) {
+    ss << "\"__metadata__\": {";
+    size_t nmeta = 0;
+    for (const auto &item : st.metadata) {
+      if (nmeta > 0) {
+        ss << ", ";
+      }
+      ss << "\"" + item.first + "\": \"" << item.second << "\"";
+      nmeta++;
+    }
+    ss << "}";
+
+    if (st.tensors.size()) {
+      ss << ", ";
+    }
+  }
+
+  size_t ntensors = 0;
+  {
+    for (const auto &item : st.tensors) {
+
+      const safetensors::tensor_t &tensor = item.second;
+
+      if (tensor.shape.size() > safetensors::kMaxDim) {
+        if (err) {
+          (*err) += item.first + ".shape is too large.\n";
+          (*err) += _err;
+        }
+        return false;
+      }
+
+      if (ntensors > 0) {
+        ss << ", ";
+      }
+      ss << "\"" << item.first << "\": {";
+      ss << "\"dtype\": \"" << safetensors::get_dtype_str(tensor.dtype) << "\", ";
+      ss << "\"shape\": [";
+      for (size_t i = 0; i < tensor.shape.size(); i++) {
+        if (i > 0) {
+          ss << ", ";
+        }
+        ss << tensor.shape[i];
+      }
+      ss << "]";
+      ss << ", \"data_offsets\": [" << tensor.data_offsets[0] << ", " << tensor.data_offsets[1] << "]";
+      ss << "}";
+      ntensors++;
+    }
+  }
+  ss << "}";
+
+
+  std::string header_str = ss.str();
+
+  uint64_t header_size = header_str.size(); // do not include '\n'
+
+  const void *databuffer_addr{nullptr};
+  size_t databuffer_size{0};
+  if (st.mmaped) {
+    databuffer_size = st.mmap_size;
+    databuffer_addr = st.mmap_addr;
+  } else {
+    databuffer_size = st.storage.size();
+    databuffer_addr = reinterpret_cast<const void *>(st.storage.data());
+  }
+
+  // make databuffer addr start from the multiple of 8.
+  size_t pad_bytes = 0;
+  if ((header_size % 8) != 0) {
+    pad_bytes = 8 - (header_size % 8);
+  }
+  printf("header_size = %d\n", int(header_size));
+  printf("pad_bytes = %d\n", int(pad_bytes));
+  size_t padded_header_size = header_size + pad_bytes;
+  dst->resize(8 + padded_header_size + databuffer_size);
+
+  // write padded header_size
+  memcpy(dst->data(), &padded_header_size, 8);
+
+  // write header
+  memcpy(dst->data() + 8, header_str.data(), header_size);
+
+  // Use whitespace for trailing padding.
+  memset(dst->data() + 8 + header_size, 0x20, pad_bytes);
+
+  memcpy(dst->data() + 8 + padded_header_size, databuffer_addr, databuffer_size);
+
+  return true;
+}
+
+bool save_to_file(const safetensors_t &st, const std::string &filename,
+                  std::string *warn, std::string *err) {
+
+  // TODO: Use more reliable io.
+  std::ofstream ofs(filename);
+  
+  if (!ofs) {
+    if (err) {
+      (*err) += "Failed to open `" + filename + "` to write. File is either existing directory or write-protected, or disk is full?\n";
+    }
+    return false;
+  } 
+
+  std::vector<uint8_t> buf;
+  if (!save_to_memory(st, &buf, warn, err)) {
+    return false;
+  }
+
+  ofs.write(reinterpret_cast<const char *>(buf.data()), buf.size());
+  if (!ofs) {
+    if (err) {
+      (*err) += "Failed to write safetensor data to `" + filename + "`. Maye no disk space available?(Required bytes : " + std::to_string(buf.size()) + "\n";
+    }
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace safetensors

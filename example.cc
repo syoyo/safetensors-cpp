@@ -75,6 +75,7 @@ std::string to_string_snipped(const safetensors::tensor_t &t,
     }
     ss << "]";
   } else {
+    ss << "[";
     size_t head_end = (std::min)(N, nitems);
     size_t tail_start = (std::max)(nitems - N, head_end);
 
@@ -153,7 +154,7 @@ int main(int argc, char **argv) {
 
     std::cout << "  data_offsets["
               << std::to_string(item.second.data_offsets[0]) << ", "
-              << std::to_string(item.second.data_offsets[1]) << "\n";
+              << std::to_string(item.second.data_offsets[1]) << "]\n";
     std::cout << "  " << to_string_snipped(item.second, databuffer) << "\n";
   }
 
