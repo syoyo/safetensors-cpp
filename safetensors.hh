@@ -56,11 +56,22 @@ struct safetensors_t {
   std::map<std::string, tensor_t> tensors;
   std::map<std::string, std::string> metadata;
   std::vector<uint8_t> storage;  // empty when mmap'ed
-
-  const uint8_t *mmap_addr{nullptr};
-  size_t mmap_size{0};
+  size_t header_size{0}; // JSON size
 
   bool mmaped{false};
+
+  //
+  // Following members are set when mmaped.
+  //
+  const uint8_t *mmap_addr{nullptr};
+  size_t mmap_size{0};
+  const uint8_t *databuffer_addr{nullptr}; // [mmap_addr + header_size + 8]
+  size_t databuffer_size{0}; // mmap_size - header_size - 8
+  // opaque pointer to safetensors_file and safetensors_mmap
+  void *st_file{nullptr};
+  void *st_mmap{nullptr};
+
+  ~safetensors_t();
 };
 
 //
@@ -113,14 +124,13 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
                     std::string *warn, std::string *err);
 
-#if 0 // TODO
 //
-// Load safetensors with memory mapping(i.e. zero-copy).
+// Load safetensors from mmaped region.
 // databuffer is not copied to `safetensors_t` object, thus the app must not
 // free/unmap `addr` during `safetensor_t` object is live.
 //
-// @param[in] addr Memory address of safetensors data.
-// @param[in] nbytes The size in bytes.
+// @param[in] addr mmaped memory address of safetensors data.
+// @param[in] nbytes mmap bytes.
 // @param[in] filename Filename of corresponding memory data. Can be empty.
 // @param[out] st safetensors data.
 // @param[out] warn Warning message buffer(can be nullptr if you don't need
@@ -129,9 +139,8 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
 // message)
 //
 // @return true upon success. `err` will be filled when false.
-bool mmap_from_memory(const void *arr, const size_t nbytes, const std::string &filename, safetensors_t *st,
+bool mmap_from_memory(const uint8_t *arr, const size_t nbytes, const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
-#endif
 
 //
 // Save safetensors to file.
@@ -2903,6 +2912,13 @@ struct safetensors_file {
     }
   }
 
+  ~safetensors_file() {
+    if (fp) {
+      std::fclose(fp);
+      fp = nullptr;
+    }
+  }
+
   size_t tell() const {
 #ifdef _WIN32
     __int64 ret = _ftelli64(fp);
@@ -3267,26 +3283,7 @@ uint16_t float_to_half_full_le(float _f) {
   return o.u;
 }
 
-}  // namespace detail
-
-//
-// - 8byte: header_size
-// - json data(header_size bytes)
-// - tensor data(filesize - header_size)
-//
-
-bool load_from_file(const std::string &filename, safetensors_t *st,
-                    std::string *warn, std::string *err) {
-  std::vector<unsigned char> data;
-  if (!detail::ReadWholeFile(&data, err, filename, nullptr)) {
-    return false;
-  }
-
-  return load_from_memory(reinterpret_cast<const uint8_t *>(data.data()),
-                          data.size(), filename, st, warn, err);
-}
-
-bool load_from_memory(const uint8_t *addr, const size_t nbytes,
+bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
                       const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err) {
   if (nbytes < 16) {
@@ -3376,7 +3373,9 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 
   st->tensors = std::move(tensors);
   st->metadata = std::move(metadata);
+  st->header_size = header_size;
 
+#if 0
   size_t databuffer_size = nbytes - header_size - 8;
 
   st->storage.resize(nbytes);
@@ -3385,6 +3384,143 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
   st->mmaped = false;
   st->mmap_addr = addr + 8 + header_size;
   st->mmap_size = 0;
+#endif
+
+  return true;
+}
+
+}  // namespace detail
+
+safetensors_t::~safetensors_t() {
+  if (st_mmap) {
+    detail::safetensors_mmap *p = reinterpret_cast<detail::safetensors_mmap *>(st_mmap);
+    delete p;
+    st_mmap = nullptr;
+  }
+
+  if (st_file) {
+    detail::safetensors_file *p = reinterpret_cast<detail::safetensors_file *>(st_file);
+    delete p;
+    st_file = nullptr;
+  }
+}
+
+//
+// - 8byte: header_size
+// - json data(header_size bytes)
+// - tensor data(filesize - header_size)
+//
+
+bool load_from_file(const std::string &filename, safetensors_t *st,
+                    std::string *warn, std::string *err) {
+  std::vector<unsigned char> data;
+  if (!detail::ReadWholeFile(&data, err, filename, nullptr)) {
+    return false;
+  }
+
+  return load_from_memory(reinterpret_cast<const uint8_t *>(data.data()),
+                          data.size(), filename, st, warn, err);
+}
+
+bool load_from_memory(const uint8_t *addr, const size_t nbytes,
+                      const std::string &filename, safetensors_t *st,
+                      std::string *warn, std::string *err) {
+  if (nbytes < 16) {
+    if (err) {
+      (*err) += "Size is too short.\n";
+    }
+    return false;
+  }
+
+  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn, err)) {
+    return false;
+  }
+
+  size_t databuffer_size = nbytes - st->header_size - 8;
+
+  st->storage.resize(databuffer_size);
+  memcpy(st->storage.data(), addr + 8 + st->header_size, databuffer_size);
+
+  st->mmaped = false;
+  st->mmap_addr = nullptr;
+  st->mmap_size = 0;
+  st->databuffer_addr = nullptr;
+  st->databuffer_size = 0;
+
+  return true;
+}
+
+bool mmap_from_file(const std::string &filename, safetensors_t *st,
+                    std::string *warn, std::string *err) {
+
+  if (!st) {
+    return false;
+  }
+
+  detail::safetensors_file *pf = new detail::safetensors_file(filename.c_str(), "rb");
+  if (!pf->is_valid()) {
+    if (err) {
+      (*err) += pf->get_error();
+    }
+    delete pf;
+    return false;
+  }
+
+  // TODO: prefetch, numa
+  detail::safetensors_mmap *pm = new detail::safetensors_mmap(pf);
+
+  bool ret = mmap_from_memory(pm->addr, pm->size, filename, st, warn, err);
+
+  if (!ret) {
+    delete pm;
+    delete pf;
+
+    return false;
+  }
+
+  st->mmap_addr = pm->addr;
+  st->mmap_size = pm->size;
+
+  st->databuffer_addr = st->mmap_addr + 8 + st->header_size;
+  st->databuffer_size = st->mmap_size - (8 + st->header_size);
+
+  // retain pointer
+  st->st_file = pf;
+  st->st_mmap = pm;
+
+  st->mmaped = true;
+
+  return true;
+}
+
+bool mmap_from_memory(const uint8_t *addr, const size_t nbytes, const std::string &filename, safetensors_t *st,
+                      std::string *warn, std::string *err) {
+
+  if (!addr) {
+    return false;
+  }
+
+  if (nbytes < 16) {
+    return false;
+  }
+
+  if (!st) {
+    return false;
+  }
+
+  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn, err)) {
+    return false;
+  }
+
+  size_t databuffer_size = nbytes - st->header_size - 8;
+
+  st->mmaped = true;
+
+  st->mmap_addr = addr;
+  st->mmap_size = nbytes;
+
+  st->databuffer_addr = st->mmap_addr + 8 + st->header_size;
+  st->databuffer_size = st->mmap_size - (8 + st->header_size);
 
   return true;
 }
@@ -3507,13 +3643,15 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
 
   std::stringstream ss;
 
-  size_t datasize;
+  size_t databuffersize;
   if (st.mmaped) {
-    datasize = st.mmap_size;
+    databuffersize = st.databuffer_size;
   } else {
-    datasize = st.storage.size();
+    databuffersize = st.storage.size();
   }
 
+  size_t ntensors{0};
+  // Assume iterate with lexicographically order.
   for (const auto &item : st.tensors) {
     const tensor_t &tensor = item.second;
 
@@ -3532,16 +3670,16 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
     }
 
     // data_offsets are absolute offset from the databuffer(file)
-    if (tensor.data_offsets[0] > datasize) {
+    if (tensor.data_offsets[0] > databuffersize) {
       ss << "Tensor `" << item.first << "`.data_offset.BEGIN "
-         << tensor.data_offsets[0] << " exceeds input data size " << datasize
+         << tensor.data_offsets[0] << " exceeds databuffer size " << databuffersize
          << ".\n";
       valid = false;
     }
 
-    if (tensor.data_offsets[1] > datasize) {
+    if (tensor.data_offsets[1] > databuffersize) {
       ss << "Tensor `" << item.first << "`.data_offset.END "
-         << tensor.data_offsets[1] << " exceeds input data size " << datasize
+         << tensor.data_offsets[1] << " exceeds databuffer size " << databuffersize
          << ".\n";
       valid = false;
     }
@@ -3553,6 +3691,15 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
          << tensor_size << ", but the size from data_offsets is " << data_size
          << "\n";
       valid = false;
+    }
+
+    ntensors++;
+    if (ntensors == st.tensors.size()) {
+      // Last element's data_offsets[1] must be equal to databuffer size.
+      if (tensor.data_offsets[1] != databuffersize) {
+        ss << "The last tensor's data_offset.END(" << tensor.data_offsets[1] << ") must be equal to databufer size " << databuffersize << ".\n";
+        valid = false;
+      }
     }
   }
 
@@ -3641,8 +3788,8 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
   const void *databuffer_addr{nullptr};
   size_t databuffer_size{0};
   if (st.mmaped) {
-    databuffer_size = st.mmap_size;
-    databuffer_addr = st.mmap_addr;
+    databuffer_size = st.databuffer_size;
+    databuffer_addr = st.databuffer_addr;
   } else {
     databuffer_size = st.storage.size();
     databuffer_addr = reinterpret_cast<const void *>(st.storage.data());
@@ -3677,13 +3824,13 @@ bool save_to_file(const safetensors_t &st, const std::string &filename,
 
   // TODO: Use more reliable io.
   std::ofstream ofs(filename);
-  
+
   if (!ofs) {
     if (err) {
       (*err) += "Failed to open `" + filename + "` to write. File is either existing directory or write-protected, or disk is full?\n";
     }
     return false;
-  } 
+  }
 
   std::vector<uint8_t> buf;
   if (!save_to_memory(st, &buf, warn, err)) {

@@ -6,6 +6,8 @@
 #endif
 #include "safetensors.hh"
 
+#define USE_MMAP
+
 // TODO: provide printer for each dtype for efficiency.
 std::string to_string(safetensors::dtype dtype, const uint8_t *data) {
   switch (dtype) {
@@ -111,7 +113,12 @@ int main(int argc, char **argv) {
   }
 
   std::string warn, err;
+#if defined(USE_MMAP)
+  printf("USE mmap\n");
+  bool ret = safetensors::mmap_from_file(filename, &st, &warn, &err);
+#else
   bool ret = safetensors::load_from_file(filename, &st, &warn, &err);
+#endif
 
   if (warn.size()) {
     std::cout << "WARN: " << warn << "\n";
@@ -134,7 +141,7 @@ int main(int argc, char **argv) {
 
   const uint8_t *databuffer{nullptr};
   if (st.mmaped) {
-    databuffer = st.mmap_addr;
+    databuffer = st.databuffer_addr;
   } else {
     databuffer = st.storage.data();
   }

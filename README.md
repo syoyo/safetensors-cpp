@@ -7,7 +7,7 @@ Code is tested with fuzzer.
 
 * [x] Load safetensors
   * Load from a file
-    * [ ] mmap zero-copy load
+    * [x] mmap zero-copy load
   * Load from memory
 * [x] Save safetensors
   * See [serialize-example.cc](serialize-example.cc) for details.
@@ -120,8 +120,11 @@ C API will be provided in `safetensors-c.h` for other language bindings.
 
 ## TODO
 
-* [ ] mmap load.
-* [ ] Save safetensors.
+* [ ] Strict `shape` size check.
+* [ ] Remove `internal::from_chars`(parse number(floating point value) from string)
+  * We only need int number parser
+* [x] mmap load.
+* [x] Save safetensors.
 * [ ] Do more tests.
 * [ ] validate dict key is valid UTF-8 string.
 * [ ] CI build script.
@@ -137,6 +140,7 @@ MIT license
 
 * minijson(included in `safetensors.hh`) : MIT license
   * Grisu2(parse floating point value in minijson) : MIT license
+  * internal::from_chars : Apache 2.0 license.
 * llama.cpp(mmap feature) : MIT license.
 * MIOpen(bf16 conversion) : MIT license.
 * fp16 conversion: CC0 license. https://gist.github.com/rygorous/2156668
