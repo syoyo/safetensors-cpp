@@ -147,30 +147,38 @@ int main(int argc, char **argv) {
   }
 
   // Print Tensor info & value.
-  for (const auto &item : st.tensors) {
-    std::cout << item.first << ": "
-              << safetensors::get_dtype_str(item.second.dtype) << " ";
+  for (size_t i = 0; i < st.tensors.size(); i++) {
+    std::string key = st.tensors.keys()[i];
+    safetensors::tensor_t tensor;
+    st.tensors.at(i, &tensor);
+
+    std::cout << key << ": "
+              << safetensors::get_dtype_str(tensor.dtype) << " ";
     std::cout << "[";
-    for (size_t i = 0; i < item.second.shape.size(); i++) {
+    for (size_t i = 0; i < tensor.shape.size(); i++) {
       if (i > 0) {
         std::cout << ", ";
       }
-      std::cout << std::to_string(item.second.shape[i]);
+      std::cout << std::to_string(tensor.shape[i]);
     }
     std::cout << "]\n";
 
     std::cout << "  data_offsets["
-              << std::to_string(item.second.data_offsets[0]) << ", "
-              << std::to_string(item.second.data_offsets[1]) << "]\n";
-    std::cout << "  " << to_string_snipped(item.second, databuffer) << "\n";
+              << std::to_string(tensor.data_offsets[0]) << ", "
+              << std::to_string(tensor.data_offsets[1]) << "]\n";
+    std::cout << "  " << to_string_snipped(tensor, databuffer) << "\n";
   }
 
   // Print metadata
   if (st.metadata.size()) {
     std::cout << "\n";
     std::cout << "__metadata__\n";
-    for (const auto &item : st.metadata) {
-      std::cout << "  " << item.first << ":" << item.second << "\n";
+    for (size_t i = 0; i < st.metadata.size(); i++) {
+      std::string key = st.metadata.keys()[i];
+      std::string value;
+      st.metadata.at(i, &value);
+
+      std::cout << "  " << key << ":" << value << "\n";
     }
   }
 

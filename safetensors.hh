@@ -21,6 +21,66 @@ extern AAssetManager *asset_manager;
 #endif
 #endif
 
+// Simple C++ implementation of Python OrderedDict(preserves key insertion
+// order)
+namespace nstd {
+
+template <typename T>
+class ordered_dict {
+ public:
+  bool at(const size_t idx, T *dst) const {
+    if (idx >= _keys.size()) {
+      return false;
+    }
+
+    if (!_m.count(_keys[idx])) {
+      // This should not happen though.
+      return false;
+    }
+
+    (*dst) = _m.at(_keys[idx]);
+
+    return true;
+  }
+
+  bool count(const std::string &key) const {
+    return _m.count(key);
+  }
+
+  void insert(const std::string &key, const T &value) {
+    if (_m.count(key)) {
+      // overwrite existing value
+    } else {
+      _keys.push_back(key);
+    }
+
+    _m[key] = value;
+  }
+
+  bool at(const std::string &key, T *dst) const {
+    if (!_m.count(key)) {
+      // This should not happen though.
+      return false;
+    }
+
+    (*dst) = _m.at(key);
+
+    return true;
+  }
+
+  const std::vector<std::string> &keys() const {
+    return _keys;
+  }
+
+  size_t size() const { return _m.size(); }
+
+ private:
+  std::vector<std::string> _keys;
+  std::map<std::string, T> _m;
+};
+
+}  // namespace nstd
+
 namespace safetensors {
 
 constexpr size_t kMaxDim =
@@ -49,14 +109,12 @@ struct tensor_t {
 };
 
 struct safetensors_t {
-  // we want ordered dict(iterate tensor by lexicographically in its name(key))
-  // as done in Python, so use traditional std::map(std::string's `operator<` is
-  // implemented following a lexicographical order) instead of
-  // std::unordered_map
-  std::map<std::string, tensor_t> tensors;
-  std::map<std::string, std::string> metadata;
+  // we need ordered dict(preserves the order of key insertion)
+  // as done in Python's OrderedDict, since JSON data may not be sorted by its key string.
+  nstd::ordered_dict<tensor_t> tensors;
+  nstd::ordered_dict<std::string> metadata;
   std::vector<uint8_t> storage;  // empty when mmap'ed
-  size_t header_size{0}; // JSON size
+  size_t header_size{0};         // JSON size
 
   bool mmaped{false};
 
@@ -65,8 +123,8 @@ struct safetensors_t {
   //
   const uint8_t *mmap_addr{nullptr};
   size_t mmap_size{0};
-  const uint8_t *databuffer_addr{nullptr}; // [mmap_addr + header_size + 8]
-  size_t databuffer_size{0}; // mmap_size - header_size - 8
+  const uint8_t *databuffer_addr{nullptr};  // [mmap_addr + header_size + 8]
+  size_t databuffer_size{0};                // mmap_size - header_size - 8
   // opaque pointer to safetensors_file and safetensors_mmap
   void *st_file{nullptr};
   void *st_mmap{nullptr};
@@ -139,7 +197,8 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
 // message)
 //
 // @return true upon success. `err` will be filled when false.
-bool mmap_from_memory(const uint8_t *arr, const size_t nbytes, const std::string &filename, safetensors_t *st,
+bool mmap_from_memory(const uint8_t *arr, const size_t nbytes,
+                      const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err);
 
 //
@@ -168,7 +227,7 @@ bool save_to_file(const safetensors_t &st, const std::string &filename,
 //
 // @return true upon success. `err` will be filled when false.
 bool save_to_memory(const std::string &filename, std::vector<uint8_t> *data_out,
-                  std::string *warn, std::string *err);
+                    std::string *warn, std::string *err);
 
 //
 // Utility functions
@@ -287,6 +346,7 @@ typedef enum {
   unknown_type_error,
   memory_allocation_error,
   corrupted_json_error,
+  duplicated_key_error,
 } error;
 
 class value;
@@ -294,7 +354,9 @@ class value;
 typedef bool boolean;
 typedef double number;
 // typedef std::string string;
-typedef std::map<std::string, value> object;
+
+// For same behavior of Python OrderedDict
+typedef nstd::ordered_dict<value> object;
 typedef std::vector<value> array;
 typedef struct {
 } null_t;
@@ -611,13 +673,20 @@ class value {
       }
       ss << "]";
     } else if (auto po = as<object>()) {
-      object::const_iterator i;
+      //object::const_iterator i;
       ss << "{";
       // object o = get<object>();
-      for (i = po->begin(); i != po->end(); i++) {
-        if (i != po->begin()) ss << ", ";
-        ss << str(i->first.c_str());
-        ss << ": " << i->second.str();
+      for (size_t i = 0; i < po->size(); i++) {
+        if (i > 0) ss << ", ";
+        ss << po->keys()[i];
+
+        value v;
+        if (po->at(i, &v)) {
+          ss << ": " << v.str();
+        } else {
+          // TODO: report error
+          ss << ": null";
+        }
       }
       ss << "}";
     }
@@ -657,7 +726,11 @@ inline error parse_object(Iter &i, value &v) {
         return unknown_type_error;
       }
 
-      o[*ps] = vv;
+      if (o.count(*ps)) {
+        return duplicated_key_error;
+      }
+      o.insert(*ps, vv);
+
       MINIJSON_SKIP(i)
       if (!(*i)) {
         return corrupted_json_error;
@@ -865,6 +938,10 @@ inline const char *errstr(error e) {
     }
     case corrupted_json_error: {
       s = "input is corrupted";
+      break;
+    }
+    case duplicated_key_error: {
+      s = "duplicated key found";
       break;
     }
       // default: return "unknown error";
@@ -2612,24 +2689,32 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 }
 
 bool parse_metadata(const minijson::value &v,
-                    std::map<std::string, std::string> &dst, std::string *err) {
+                    nstd::ordered_dict<std::string> &dst, std::string *err) {
   if (auto po = v.as<minijson::object>()) {
-    minijson::object::const_iterator i;
-    for (i = po->begin(); i != po->end(); i++) {
-      if (auto so = i->second.as<std::string>()) {
-        if (dst.count(i->first)) {
+    for (size_t i = 0; i < po->size(); i++) {
+      minijson::value ov;
+      if (!po->at(i, &ov)) {
           if (err) {
             (*err) +=
-                "Duplicate key `" + i->first + "` found in __metadata__.\n";
+                "[Internal error] Invalid object found in __metadata__, at index " + std::to_string(i) + ".\n";
+          }
+          return false;
+      }
+
+      if (auto so = ov.as<std::string>()) {
+        if (dst.count(po->keys()[i])) {
+          // This should not be happen though
+          if (err) {
+            (*err) +=
+                "Duplicate key `" + po->keys()[i] + "` found in __metadata__.\n";
           }
           return false;
         }
 
-        dst[i->first] = *so;
+        dst.insert(po->keys()[i], *so);
       } else {
         if (err) {
-          (*err) += "`" + i->first + "` must be string type, but got " +
-                    i->second.type_name() + ".\n";
+          (*err) += "`" + po->keys()[i] + "` must be string value.\n";
         }
         return false;
       }
@@ -2779,7 +2864,6 @@ bool parse_data_offsets(const minijson::value &v, std::array<size_t, 2> &dst,
 bool parse_tensor(const std::string &name, const minijson::value &v,
                   tensor_t &tensor, std::string *err) {
   if (auto po = v.as<minijson::object>()) {
-    minijson::object::const_iterator i;
 
     bool dtype_found{false};
     bool shape_found{false};
@@ -2789,21 +2873,46 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
     std::vector<size_t> shape;
     std::array<size_t, 2> data_offsets{};
 
-    for (i = po->begin(); i != po->end(); i++) {
-      if (i->first == "dtype") {
-        if (!parse_dtype(i->second, dtype, err)) {
+    for (size_t i = 0; i < po->size(); i++) {
+      std::string key = po->keys()[i];
+
+      if (key == "dtype") {
+        minijson::value value;
+        if (!po->at(i, &value)) {
+          if (err) {
+            (*err) += "Internal error. `dtype` has invalid object.\n";
+          }
+          return false;
+        }
+
+        if (!parse_dtype(value, dtype, err)) {
           return false;
         }
 
         dtype_found = true;
-      } else if (i->first == "shape") {
-        if (!parse_shape(i->second, shape, err)) {
+      } else if (key == "shape") {
+        minijson::value value;
+        if (!po->at(i, &value)) {
+          if (err) {
+            (*err) += "Internal error. `shape` has invalid object.\n";
+          }
+          return false;
+        }
+
+        if (!parse_shape(value, shape, err)) {
           return false;
         }
 
         shape_found = true;
-      } else if (i->first == "data_offsets") {
-        if (!parse_data_offsets(i->second, data_offsets, err)) {
+      } else if (key == "data_offsets") {
+        minijson::value value;
+        if (!po->at(i, &value)) {
+          if (err) {
+            (*err) += "Internal error. `data_offsets` has invalid object.\n";
+          }
+          return false;
+        }
+        if (!parse_data_offsets(value, data_offsets, err)) {
           return false;
         }
 
@@ -3284,8 +3393,8 @@ uint16_t float_to_half_full_le(float _f) {
 }
 
 bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
-                      const std::string &filename, safetensors_t *st,
-                      std::string *warn, std::string *err) {
+                              const std::string &filename, safetensors_t *st,
+                              std::string *warn, std::string *err) {
   if (nbytes < 16) {
     if (err) {
       (*err) += "Size is too short.\n";
@@ -3336,33 +3445,50 @@ bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
     return false;
   }
 
-  std::map<std::string, tensor_t> tensors;
-  std::map<std::string, std::string> metadata;
+  nstd::ordered_dict<tensor_t> tensors;
+  nstd::ordered_dict<std::string> metadata;
 
   // root element must be dict.
   if (auto po = v.as<minijson::object>()) {
-    minijson::object::const_iterator i;
-    for (i = po->begin(); i != po->end(); i++) {
-      if (i->first == "__metadata__") {
-        if (!detail::parse_metadata(i->second, metadata, err)) {
+    for (size_t i = 0; i < po->size(); i++) {
+      std::string key = po->keys()[i];
+
+      if (key == "__metadata__") {
+        minijson::value value;
+        if (!po->at(i, &value)) {
+          if (err) {
+            (*err) += "Internal error. Invalid object in __metadata__.\n";
+          }
+          return false;
+        }
+
+        if (!detail::parse_metadata(value, metadata, err)) {
           return false;
         }
       } else {
         // tensor
 
-        if (tensors.count(i->first)) {
+        if (tensors.count(key)) {
           if (err) {
-            (*err) += "Duplicate key `" + i->first + "` found.\n";
+            (*err) += "Duplicate key `" + key + "` found.\n";
+          }
+          return false;
+        }
+
+        minijson::value value;
+        if (!po->at(i, &value)) {
+          if (err) {
+            (*err) += "Internal error. Invalid object in `" + key + "`.\n";
           }
           return false;
         }
 
         tensor_t tensor;
-        if (!detail::parse_tensor(i->first, i->second, tensor, err)) {
+        if (!detail::parse_tensor(key, value, tensor, err)) {
           return false;
         }
 
-        tensors[i->first] = std::move(tensor);
+        tensors.insert(key, std::move(tensor));
       }
     }
   } else {
@@ -3393,13 +3519,15 @@ bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
 
 safetensors_t::~safetensors_t() {
   if (st_mmap) {
-    detail::safetensors_mmap *p = reinterpret_cast<detail::safetensors_mmap *>(st_mmap);
+    detail::safetensors_mmap *p =
+        reinterpret_cast<detail::safetensors_mmap *>(st_mmap);
     delete p;
     st_mmap = nullptr;
   }
 
   if (st_file) {
-    detail::safetensors_file *p = reinterpret_cast<detail::safetensors_file *>(st_file);
+    detail::safetensors_file *p =
+        reinterpret_cast<detail::safetensors_file *>(st_file);
     delete p;
     st_file = nullptr;
   }
@@ -3432,7 +3560,8 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
     return false;
   }
 
-  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn, err)) {
+  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn,
+                                        err)) {
     return false;
   }
 
@@ -3452,12 +3581,12 @@ bool load_from_memory(const uint8_t *addr, const size_t nbytes,
 
 bool mmap_from_file(const std::string &filename, safetensors_t *st,
                     std::string *warn, std::string *err) {
-
   if (!st) {
     return false;
   }
 
-  detail::safetensors_file *pf = new detail::safetensors_file(filename.c_str(), "rb");
+  detail::safetensors_file *pf =
+      new detail::safetensors_file(filename.c_str(), "rb");
   if (!pf->is_valid()) {
     if (err) {
       (*err) += pf->get_error();
@@ -3493,9 +3622,9 @@ bool mmap_from_file(const std::string &filename, safetensors_t *st,
   return true;
 }
 
-bool mmap_from_memory(const uint8_t *addr, const size_t nbytes, const std::string &filename, safetensors_t *st,
+bool mmap_from_memory(const uint8_t *addr, const size_t nbytes,
+                      const std::string &filename, safetensors_t *st,
                       std::string *warn, std::string *err) {
-
   if (!addr) {
     return false;
   }
@@ -3508,7 +3637,8 @@ bool mmap_from_memory(const uint8_t *addr, const size_t nbytes, const std::strin
     return false;
   }
 
-  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn, err)) {
+  if (!detail::parse_safetensors_header(addr, nbytes, filename, st, warn,
+                                        err)) {
     return false;
   }
 
@@ -3651,12 +3781,20 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
   }
 
   size_t ntensors{0};
-  // Assume iterate with lexicographically order.
-  for (const auto &item : st.tensors) {
-    const tensor_t &tensor = item.second;
+  // Iterate with key insertion order.
+  for (size_t i =0 ;i < st.tensors.size(); i++) {
+
+    std::string key = st.tensors.keys()[i];
+
+    tensor_t tensor;
+    if (!st.tensors.at(i, &tensor)) {
+      ss << "Internal error: Failed to get tensor at [" << i << "]\n";
+      valid = false;
+      continue;
+    }
 
     if (tensor.data_offsets[0] > tensor.data_offsets[1]) {
-      ss << item.first << ".data_offsets.BEGIN " << tensor.data_offsets[0]
+      ss << key << ".data_offsets.BEGIN " << tensor.data_offsets[0]
          << " must be less than or equal to data_offsets.END "
          << tensor.data_offsets[1] << "\n";
       valid = false;
@@ -3671,23 +3809,23 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
 
     // data_offsets are absolute offset from the databuffer(file)
     if (tensor.data_offsets[0] > databuffersize) {
-      ss << "Tensor `" << item.first << "`.data_offset.BEGIN "
-         << tensor.data_offsets[0] << " exceeds databuffer size " << databuffersize
-         << ".\n";
+      ss << "Tensor `" << key << "`.data_offset.BEGIN "
+         << tensor.data_offsets[0] << " exceeds databuffer size "
+         << databuffersize << ".\n";
       valid = false;
     }
 
     if (tensor.data_offsets[1] > databuffersize) {
-      ss << "Tensor `" << item.first << "`.data_offset.END "
-         << tensor.data_offsets[1] << " exceeds databuffer size " << databuffersize
-         << ".\n";
+      ss << "Tensor `" << key << "`.data_offset.END "
+         << tensor.data_offsets[1] << " exceeds databuffer size "
+         << databuffersize << ".\n";
       valid = false;
     }
 
     size_t data_size = tensor.data_offsets[1] - tensor.data_offsets[0];
 
     if (tensor_size != data_size) {
-      ss << "Data size mismatch. The size in Tensor `" << item.first << "` is "
+      ss << "Data size mismatch. The size in Tensor `" << key << "` is "
          << tensor_size << ", but the size from data_offsets is " << data_size
          << "\n";
       valid = false;
@@ -3697,7 +3835,8 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
     if (ntensors == st.tensors.size()) {
       // Last element's data_offsets[1] must be equal to databuffer size.
       if (tensor.data_offsets[1] != databuffersize) {
-        ss << "The last tensor's data_offset.END(" << tensor.data_offsets[1] << ") must be equal to databufer size " << databuffersize << ".\n";
+        ss << "The last tensor's data_offset.END(" << tensor.data_offsets[1]
+           << ") must be equal to databufer size " << databuffersize << ".\n";
         valid = false;
       }
     }
@@ -3711,8 +3850,7 @@ bool validate_data_offsets(const safetensors_t &st, std::string &err) {
 }
 
 bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
-                  std::string *warn, std::string *err) {
-
+                    std::string *warn, std::string *err) {
   // directly serialize JSON string.
   std::stringstream ss;
 
@@ -3732,11 +3870,15 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
   if (st.metadata.size()) {
     ss << "\"__metadata__\": {";
     size_t nmeta = 0;
-    for (const auto &item : st.metadata) {
+    for (size_t i = 0; i < st.metadata.size(); i++) {
+      std::string key = st.metadata.keys()[i];
+      std::string value;
+      st.metadata.at(i, &value);
+
       if (nmeta > 0) {
         ss << ", ";
       }
-      ss << "\"" + item.first + "\": \"" << item.second << "\"";
+      ss << "\"" + key + "\": \"" << value << "\"";
       nmeta++;
     }
     ss << "}";
@@ -3748,13 +3890,15 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
 
   size_t ntensors = 0;
   {
-    for (const auto &item : st.tensors) {
+    for (size_t i = 0; i < st.tensors.size(); i++) {
 
-      const safetensors::tensor_t &tensor = item.second;
+      std::string key = st.tensors.keys()[i];
+      safetensors::tensor_t tensor;
+      st.tensors.at(i, &tensor);
 
       if (tensor.shape.size() > safetensors::kMaxDim) {
         if (err) {
-          (*err) += item.first + ".shape is too large.\n";
+          (*err) += key + ".shape is too large.\n";
           (*err) += _err;
         }
         return false;
@@ -3763,8 +3907,9 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
       if (ntensors > 0) {
         ss << ", ";
       }
-      ss << "\"" << item.first << "\": {";
-      ss << "\"dtype\": \"" << safetensors::get_dtype_str(tensor.dtype) << "\", ";
+      ss << "\"" << key << "\": {";
+      ss << "\"dtype\": \"" << safetensors::get_dtype_str(tensor.dtype)
+         << "\", ";
       ss << "\"shape\": [";
       for (size_t i = 0; i < tensor.shape.size(); i++) {
         if (i > 0) {
@@ -3773,17 +3918,17 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
         ss << tensor.shape[i];
       }
       ss << "]";
-      ss << ", \"data_offsets\": [" << tensor.data_offsets[0] << ", " << tensor.data_offsets[1] << "]";
+      ss << ", \"data_offsets\": [" << tensor.data_offsets[0] << ", "
+         << tensor.data_offsets[1] << "]";
       ss << "}";
       ntensors++;
     }
   }
   ss << "}";
 
-
   std::string header_str = ss.str();
 
-  uint64_t header_size = header_str.size(); // do not include '\n'
+  uint64_t header_size = header_str.size();  // do not include '\n'
 
   const void *databuffer_addr{nullptr};
   size_t databuffer_size{0};
@@ -3814,20 +3959,22 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
   // Use whitespace for trailing padding.
   memset(dst->data() + 8 + header_size, 0x20, pad_bytes);
 
-  memcpy(dst->data() + 8 + padded_header_size, databuffer_addr, databuffer_size);
+  memcpy(dst->data() + 8 + padded_header_size, databuffer_addr,
+         databuffer_size);
 
   return true;
 }
 
 bool save_to_file(const safetensors_t &st, const std::string &filename,
                   std::string *warn, std::string *err) {
-
   // TODO: Use more reliable io.
   std::ofstream ofs(filename);
 
   if (!ofs) {
     if (err) {
-      (*err) += "Failed to open `" + filename + "` to write. File is either existing directory or write-protected, or disk is full?\n";
+      (*err) += "Failed to open `" + filename +
+                "` to write. File is either existing directory or "
+                "write-protected, or disk is full?\n";
     }
     return false;
   }
@@ -3840,7 +3987,9 @@ bool save_to_file(const safetensors_t &st, const std::string &filename,
   ofs.write(reinterpret_cast<const char *>(buf.data()), buf.size());
   if (!ofs) {
     if (err) {
-      (*err) += "Failed to write safetensor data to `" + filename + "`. Maye no disk space available?(Required bytes : " + std::to_string(buf.size()) + "\n";
+      (*err) += "Failed to write safetensor data to `" + filename +
+                "`. Maye no disk space available?(Required bytes : " +
+                std::to_string(buf.size()) + "\n";
     }
     return false;
   }

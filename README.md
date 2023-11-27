@@ -68,11 +68,11 @@ if (!safetensors::validate_data_offsets(st, err)) {
   return false;
 }
 
-for (const auto &item : st.tensors) {
+for (size_t i = 0; i < st.tensors.size(); i++) {
   // do something with tensor
 }
 
-for (const auto &item : st.metadata) {
+for (size_t i = 0; i < st.metadata.size(); i++) {
   // do something with __metadata__
 }
 
