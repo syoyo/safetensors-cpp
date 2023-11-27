@@ -1,6 +1,6 @@
-# Header-only safetensors loader in C/C++
+# Dependency-free safetensors loader/writer in C/C++
 
-Secure, header-only safetensors loader in portable C/C++.
+Secure, dependency-free safetensors loader/writer in portable C/C++.
 Code is tested with fuzzer.
 
 ## Features
