@@ -60,6 +60,10 @@ void safetensors_c_init(safetensors_c_safetensors_t *st);
 void safetensors_c_free(safetensors_c_safetensors_t *st);
 
 void safetensors_c_tensor_init(safetensors_c_tensor_t *t);
+
+//
+// Currently there is no dynamically allocated members in tensor, so this API does nothing.
+//
 void safetensors_c_tensor_free(safetensors_c_tensor_t *t);
 
 //
@@ -111,6 +115,42 @@ safetensors_c_status_t safetensors_c_mmap_from_memory(
 int safetensors_c_safetensors_free(safetensors_c_safetensors_t *st);
 
 ///
+/// @return The number of tensors.
+uint32_t safetensors_c_num_tensors(const safetensors_c_safetensors_t *st);
+
+///
+/// Check if tensor item with `key` exists.
+/// @return SAFETENSORS_C_SUCCESS upon success and fill `has_tensor`, others are error.
+///
+int safetensors_c_has_tensor(const safetensors_c_safetensors_t *st,
+                               const char *key, int *has_tensor);
+
+///
+/// Get tensor item for `key`. Return NULL when no corresponding tensor item
+/// exists for `key`.
+/// Memory is **not** allocated for returned tensor value. No need for freeing `tensor` after using it.
+///
+/// @return SAFETENSORS_C_SUCCESS upon success and fill `tensor`, others are error.
+int safetensors_c_get_tensor(const safetensors_c_safetensors_t *st,
+                                     const char *key,
+                                     safetensors_c_tensor_t *tensor);
+
+///
+/// Get tensor item at specified index. Return NULL when index is out-of-range.
+/// exists for `key`.
+/// Memory is **not** allocated for returned tensor value. No need for freeing `tensor` after using it.
+///
+/// @return SAFETENSORS_C_SUCCESS upon success and fill `tensor`, others are error.
+int safetensors_c_get_tensor_at(const safetensors_c_safetensors_t *st,
+                                       uint32_t index,
+                                       char **value);
+
+///
+/// @return The number of metadata items.
+///
+uint32_t safetensors_c_num_metadata(const safetensors_c_safetensors_t *st);
+
+///
 /// Check if metadata item with `key` exists.
 /// @return 1 if the metadata has item with `key`. 0 not.
 int safetensors_c_has_metadata(const safetensors_c_safetensors_t *st,
@@ -123,6 +163,15 @@ int safetensors_c_has_metadata(const safetensors_c_safetensors_t *st,
 ///
 const char *safetensors_c_get_metadata(const safetensors_c_safetensors_t *st,
                                        const char *key,
+                                       char **value);
+
+///
+/// Get metadata item at specified index. Return NULL when index is out-of-range.
+/// exists for `key`.
+/// Memory will be allocated for `value`(even in mmap mode). Need to free `value` after using it.
+///
+const char *safetensors_c_get_metadata_at(const safetensors_c_safetensors_t *st,
+                                       uint32_t index,
                                        char **value);
 
 // TODO: Write API
@@ -259,7 +308,11 @@ int safetensors_c_get_tensor(const safetensors_c_safetensors_t *st,
     return SAFETENSORS_C_KEY_NOT_FOUND;
   }
 
-  auto &ts = cppst->tensors.at(key);
+  safetensors::tensor_t ts;
+
+  if (!cppst->tensors.at(key, &ts)) {
+    return SAFETENSORS_C_CORRUPTED_DATA;
+  }
 
   if (ts.shape.size() >= SAFETENSORS_C_MAX_DIM) {
     return SAFETENSORS_C_CORRUPTED_DATA;

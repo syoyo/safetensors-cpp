@@ -20,7 +20,7 @@ std::vector<float> gen_random(size_t n, size_t m) {
   std::vector<float> result;
 
   for (size_t i = 0; i < n * m; i++) {
-    result.push_back(dist(engine)); 
+    result.push_back(dist(engine));
   }
 
   return result;
@@ -40,7 +40,7 @@ static void swap2(unsigned short *val) {
 int main(int argc, char **argv) {
 
   // Directly construct tensor and safetensors.
- 
+
   safetensors::safetensors_t st;
 
   size_t data_offset_base = 0;
@@ -63,9 +63,9 @@ int main(int argc, char **argv) {
     tensor.shape[0] = 8;
     tensor.shape[1] = 8;
 
-    st.tensors.emplace("weight0", tensor);
+    st.tensors.insert("weight0", tensor);
   }
-  
+
   {
     // fp16 tensor
     std::vector<float> _weight = gen_random(16, 16);
@@ -77,11 +77,11 @@ int main(int argc, char **argv) {
 
     for (size_t i = 0; i < sz; i++) {
       uint16_t val = safetensors::float_to_fp16(_weight[i]);
-  
+
       // To avoid annoying endianness issue, use mempcy()
       memcpy(&half_weight[i], &val, 2);
     }
-    
+
     assert(sz == half_weight.size() * sizeof(uint16_t));
 
     // expand
@@ -96,12 +96,12 @@ int main(int argc, char **argv) {
     tensor.shape[0] = 16;
     tensor.shape[1] = 16;
 
-    st.tensors.emplace("weight1", tensor);
+    st.tensors.insert("weight1", tensor);
   }
 
   // __metadata__
   {
-    st.metadata.emplace("creater", "safetensors-cpp");
+    st.metadata.insert("creater", "safetensors-cpp");
   }
 
   std::string filename = "example.safetensors";
@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
   if (warn.size()) {
     std::cout << "WARN: " << warn << "\n";
   }
-  
+
   if (!ret) {
     std::cerr << "Failed to write safetensor data to " << filename << "\n";
     if (err.size()) {
@@ -120,6 +120,6 @@ int main(int argc, char **argv) {
     }
     return EXIT_FAILURE;
   }
-  
+
   return EXIT_SUCCESS;
 }

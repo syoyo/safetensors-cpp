@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #ifdef __ANDROID__
 #ifdef SAFETENSORS_CPP_ANDROID_LOAD_FROM_ASSETS
