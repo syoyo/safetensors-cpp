@@ -308,6 +308,7 @@ float fp16_to_float(uint16_t x);
 #include <cstring>
 #else
 
+namespace safetensors {
 namespace simdjson {
 namespace internal {
 
@@ -318,6 +319,7 @@ char *to_chars(char *first, const char *last, double value);
 
 }  // namespace internal
 }  // namespace simdjson
+}  // namespace safetensors
 
 #endif
 
@@ -962,7 +964,7 @@ double from_chars(const char *p) {
 #if defined(MINIJSON_USE_STRTOD)
   return strtod(p, nullptr);
 #else
-  return simdjson::internal::from_chars(p);
+  return safetensors::simdjson::internal::from_chars(p);
 #endif
 }
 
@@ -996,6 +998,7 @@ const char *my_strchr(const char *p, int ch) {
 #include <cstring>
 #include <limits>
 
+namespace safetensors {
 namespace simdjson {
 namespace internal {
 
@@ -1608,7 +1611,9 @@ double from_chars(const char *first, const char *end) noexcept {
 
 }  // namespace internal
 }  // namespace simdjson
+}  // namespace safetensors
 
+namespace safetensors {
 namespace simdjson {
 namespace internal {
 /*!
@@ -2557,6 +2562,7 @@ char *to_chars(char *first, const char *last, double value) {
 }
 }  // namespace internal
 }  // namespace simdjson
+}  // namespace safetensors
 
 #endif  // !MINIJSON_USE_STRTOD
 
