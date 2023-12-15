@@ -40,7 +40,7 @@ static void swap2(unsigned short *val) {
 int main(int argc, char **argv) {
 
   // Directly construct tensor and safetensors.
-
+  // NOTE: the order of key insertion is preserved.
   safetensors::safetensors_t st;
 
   size_t data_offset_base = 0;
