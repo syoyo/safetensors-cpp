@@ -70,12 +70,13 @@ int main(int argc, char **argv) {
     // fp16 tensor
     std::vector<float> _weight = gen_random(16, 16);
     size_t dst_offset = st.storage.size();
-    size_t sz = sizeof(uint16_t) * 16 * 16;
+    size_t n = 16 * 16;
+    size_t sz = sizeof(uint16_t) * n;
 
     std::vector<uint16_t> half_weight;
-    half_weight.resize(sz);
+    half_weight.resize(n);
 
-    for (size_t i = 0; i < sz; i++) {
+    for (size_t i = 0; i < n; i++) {
       uint16_t val = safetensors::float_to_fp16(_weight[i]);
 
       // To avoid annoying endianness issue, use mempcy()

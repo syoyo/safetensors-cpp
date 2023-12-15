@@ -3975,7 +3975,7 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
 bool save_to_file(const safetensors_t &st, const std::string &filename,
                   std::string *warn, std::string *err) {
   // TODO: Use more reliable io.
-  std::ofstream ofs(filename);
+  std::ofstream ofs(filename, std::ios::binary);
 
   if (!ofs) {
     if (err) {
@@ -3995,7 +3995,7 @@ bool save_to_file(const safetensors_t &st, const std::string &filename,
   if (!ofs) {
     if (err) {
       (*err) += "Failed to write safetensor data to `" + filename +
-                "`. Maye no disk space available?(Required bytes : " +
+                "`. Maybe no disk space available?(Required bytes : " +
                 std::to_string(buf.size()) + "\n";
     }
     return false;
