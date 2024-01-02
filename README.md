@@ -41,7 +41,7 @@ See [fuzz](fuzz) directory.
 
 ## Usage
 
-```
+```cpp
 // define only in one *.cc
 #define SAFETENSORS_CPP_IMPLEMENTATION
 #include "safetensors.hh"
