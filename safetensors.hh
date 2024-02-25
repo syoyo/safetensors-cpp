@@ -4796,8 +4796,8 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
   if ((header_size % 8) != 0) {
     pad_bytes = 8 - (header_size % 8);
   }
-  printf("header_size = %d\n", int(header_size));
-  printf("pad_bytes = %d\n", int(pad_bytes));
+  //printf("header_size = %d\n", int(header_size));
+  //printf("pad_bytes = %d\n", int(pad_bytes));
   size_t padded_header_size = header_size + pad_bytes;
   dst->resize(8 + padded_header_size + databuffer_size);
 
