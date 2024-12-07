@@ -911,6 +911,10 @@ template <typename Iter>
 inline error parse_number(Iter &i, value &v) {
   Iter p = i;
 
+  if (*i == '-') {
+    i++;
+  }
+
 #define MINIJSON_IS_NUM(x) ('0' <= x && x <= '9')
 #define MINIJSON_IS_ALNUM(x) \
   (('0' <= x && x <= '9') || ('a' <= x && x <= 'f') || ('A' <= x && x <= 'F'))
@@ -1029,7 +1033,7 @@ inline error parse_any(Iter &i, value &v) {
   if (*i == '[') return parse_array(i, v);
   if (*i == 't' || *i == 'f') return parse_boolean(i, v);
   if (*i == 'n') return parse_null(i, v);
-  if ('0' <= *i && *i <= '9') return parse_number(i, v);
+  if ((*i == '-') || ('0' <= *i && *i <= '9')) return parse_number(i, v);
   if (*i == '"') return parse_string(i, v);
   return invalid_token_error;
 }
