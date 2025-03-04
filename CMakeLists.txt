@@ -67,7 +67,7 @@ install(FILES $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/${install_headers}
 )
 # export full library interface
 install(EXPORT safetensors-cpp
-  FILE safetensors-cpp.cmake
+  FILE safetensors-cpp-config.cmake
   NAMESPACE safetensors-cpp::
-  DESTINATION lib/cmake/safetensors-cpp
+  DESTINATION lib/cmake/
 )
