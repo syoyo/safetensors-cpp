@@ -50,7 +50,7 @@ if (SAFETENSORS_CPP_BUILD_EXAMPLES)
 endif ()
 
 
-install(TARGETS safetensors_cpp EXPORT safetensorscpp
+install(TARGETS safetensors_cpp EXPORT safetensors-cpp
   LIBRARY DESTINATION lib
   INCLUDES DESTINATION include
 )
@@ -64,4 +64,10 @@ if (SAFETENSORS_CPP_BUILD_C_API)
 endif (SAFETENSORS_CPP_BUILD_C_API)
 install(FILES $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/${install_headers}
   DESTINATION include
+)
+# export full library interface
+install(EXPORT safetensors-cpp
+  FILE safetensors-cpp.cmake
+  NAMESPACE safetensors-cpp::
+  DESTINATION lib/cmake/safetensors-cpp
 )
