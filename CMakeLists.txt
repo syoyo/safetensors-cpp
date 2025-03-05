@@ -52,10 +52,11 @@ endif ()
 # one library to collect all potential targets
 add_library(safetensors-cpp INTERFACE)
 
-# add dependecy from safetensors_cpp library to its sources 
-# so that everything that links to safetensors_cpp will also get the headers
-target_include_directories(safetensors_cpp PUBLIC  
-  $<BUILD_INTERFACE:${SAFETENSORS_CPP_INCLUDE_DIR}>
+# add dependecy to sources 
+# so that everything that links to safetensors-cpp without install
+# will also get the headers
+target_include_directories(safetensors-cpp INTERFACE  
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
 install(TARGETS safetensors_cpp EXPORT safetensors-cpp
