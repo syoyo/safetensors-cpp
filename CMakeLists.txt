@@ -49,20 +49,22 @@ if (SAFETENSORS_CPP_BUILD_EXAMPLES)
   endif ()
 endif ()
 
+# one library to collect all potential targets
+add_library(safetensors-cpp INTERFACE)
 
 install(TARGETS safetensors_cpp EXPORT safetensors-cpp
   LIBRARY DESTINATION lib
   INCLUDES DESTINATION include
 )
-set(install_headers
+set(SAFETENSORS_INSTALL_HEADERS
   safetensors.hh
 )
 if (SAFETENSORS_CPP_BUILD_C_API)
-  list(APPEND install_headers
+  list(APPEND SAFETENSORS_INSTALL_HEADERS
     safetensors-c.h
   )
 endif (SAFETENSORS_CPP_BUILD_C_API)
-install(FILES $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/${install_headers}
+install(FILES $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/${SAFETENSORS_INSTALL_HEADERS}
   DESTINATION include
 )
 # export full library interface
