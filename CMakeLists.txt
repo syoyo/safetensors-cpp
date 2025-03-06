@@ -49,3 +49,39 @@ if (SAFETENSORS_CPP_BUILD_EXAMPLES)
   endif ()
 endif ()
 
+# one library to collect all potential targets
+add_library(safetensors-cpp INTERFACE)
+
+# add dependecy to sources 
+# so that everything that links to safetensors-cpp without install
+# will also get the headers
+target_include_directories(safetensors_cpp INTERFACE  
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
+install(
+  TARGETS safetensors_cpp EXPORT safetensors-cpp
+  LIBRARY DESTINATION lib
+  INCLUDES DESTINATION include
+)
+set(SAFETENSORS_INSTALL_HEADERS
+  safetensors.hh
+)
+if (SAFETENSORS_CPP_BUILD_C_API)
+  list(APPEND SAFETENSORS_INSTALL_HEADERS
+    safetensors-c.h
+  )
+endif (SAFETENSORS_CPP_BUILD_C_API)
+
+install(
+  FILES $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/${SAFETENSORS_INSTALL_HEADERS}
+  DESTINATION include
+)
+# export full library interface
+install(
+  EXPORT safetensors-cpp
+  FILE safetensors-cpp-config.cmake
+  NAMESPACE safetensors-cpp::
+  DESTINATION lib/cmake/
+)
