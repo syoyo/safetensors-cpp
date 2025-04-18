@@ -51,6 +51,8 @@ endif ()
 
 # one library to collect all potential targets
 add_library(safetensors-cpp INTERFACE)
+# and an alias to allow installing both from install path as well as add_subdirectory/FetchContent
+add_library(safetensors-cpp::safetensors-cpp ALIAS safetensors-cpp)
 
 # add dependecy to sources 
 # so that everything that links to safetensors-cpp without install
