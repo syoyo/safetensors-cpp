@@ -4030,6 +4030,7 @@ struct safetensors_mmap {
           "MapViewOfFile failed: " + safetensors_format_win_err(error) + "\n";
     }
 
+#if _WIN32_WINNT >= _WIN32_WINNT_WIN8
     if (prefetch) {
       // PrefetchVirtualMemory is only present on Windows 8 and above, so we
       // dynamically load it
@@ -4053,6 +4054,7 @@ struct safetensors_mmap {
         }
       }
     }
+#endif
   }
   ~safetensors_mmap() {
     if (!UnmapViewOfFile(addr)) {
