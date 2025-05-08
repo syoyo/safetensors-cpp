@@ -22,65 +22,6 @@ extern AAssetManager *asset_manager;
 #endif
 #endif
 
-// Simple C++ implementation of Python OrderedDict(preserves key insertion
-// order)
-namespace nstd {
-
-template <typename T>
-class ordered_dict {
- public:
-  bool at(const size_t idx, T *dst) const {
-    if (idx >= _keys.size()) {
-      return false;
-    }
-
-    if (!_m.count(_keys[idx])) {
-      // This should not happen though.
-      return false;
-    }
-
-    (*dst) = _m.at(_keys[idx]);
-
-    return true;
-  }
-
-  bool count(const std::string &key) const {
-    return _m.count(key);
-  }
-
-  void insert(const std::string &key, const T &value) {
-    if (_m.count(key)) {
-      // overwrite existing value
-    } else {
-      _keys.push_back(key);
-    }
-
-    _m[key] = value;
-  }
-
-  bool at(const std::string &key, T *dst) const {
-    if (!_m.count(key)) {
-      // This should not happen though.
-      return false;
-    }
-
-    (*dst) = _m.at(key);
-
-    return true;
-  }
-
-  const std::vector<std::string> &keys() const {
-    return _keys;
-  }
-
-  size_t size() const { return _m.size(); }
-
- private:
-  std::vector<std::string> _keys;
-  std::map<std::string, T> _m;
-};
-
-}  // namespace nstd
 
 namespace safetensors {
 
@@ -103,6 +44,91 @@ enum dtype {
   kUINT64,
 };
 
+namespace minijson {
+
+// Simple C++ implementation of Python's OrderedDict like dictonary
+// (preserves key insertion order)
+// Modified for JSON:
+// - No duplicated key allowed
+
+template <typename T>
+class ordered_dict {
+ public:
+  bool at(const size_t idx, T *dst) const {
+    if (idx >= _keys.size()) {
+      return false;
+    }
+
+    if (!_m.count(_keys[idx])) {
+      // This should not happen though.
+      return false;
+    }
+
+    (*dst) = _m.at(_keys[idx]);
+
+    return true;
+  }
+
+  bool count(const std::string &key) const { return _m.count(key); }
+
+  void insert(const std::string &key, const T &value) {
+    if (_m.count(key)) {
+      // overwrite existing value
+    } else {
+      _keys.push_back(key);
+    }
+
+    _m[key] = value;
+  }
+
+  void insert(const std::string &key, T &&value) {
+    if (_m.count(key)) {
+      // overwrite existing value
+    } else {
+      _keys.push_back(key);
+    }
+
+    _m[key] = std::move(value);
+  }
+
+  bool at(const std::string &key, T *dst) const {
+    if (!_m.count(key)) {
+      // This should not happen though.
+      return false;
+    }
+
+    (*dst) = _m.at(key);
+
+    return true;
+  }
+
+  const std::vector<std::string> &keys() const { return _keys; }
+
+  size_t size() const { return _m.size(); }
+
+  bool erase(const std::string &key) {
+    // simple linear search
+    for (size_t i = 0; i < _keys.size(); i++) {
+      if (_keys[i] == key) {
+        _keys.erase(_keys.begin() + i);
+        _m.erase(key);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+ private:
+  std::vector<std::string> _keys;
+  std::map<std::string, T> _m;
+};
+
+} // namespace minijson
+
+template <typename T>
+using ordered_dict = minijson::ordered_dict<T>;
+
 struct tensor_t {
   safetensors::dtype dtype;
   std::vector<size_t> shape;
@@ -112,8 +138,8 @@ struct tensor_t {
 struct safetensors_t {
   // we need ordered dict(preserves the order of key insertion)
   // as done in Python's OrderedDict, since JSON data may not be sorted by its key string.
-  nstd::ordered_dict<tensor_t> tensors;
-  nstd::ordered_dict<std::string> metadata;
+  ordered_dict<tensor_t> tensors;
+  ordered_dict<std::string> metadata;
   std::vector<uint8_t> storage;  // empty when mmap'ed
   size_t header_size{0};         // JSON size
 
@@ -291,15 +317,14 @@ float fp16_to_float(uint16_t x);
 /*
  * JSON parser: C++ oriented JSON parser.
  */
-#ifndef minijson_h
-#define minijson_h
 
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 
-// #define __MINIJSON_LIBERAL
+//#define __MINIJSON_LIBERAL
 
 // We recommended to use simdjson from_chars.
 // Using strtod() is a fallback
@@ -308,7 +333,7 @@ float fp16_to_float(uint16_t x);
 #include <cstring>
 #else
 
-namespace safetensors {
+namespace minijson {
 namespace simdjson {
 namespace internal {
 
@@ -319,7 +344,7 @@ char *to_chars(char *first, const char *last, double value);
 
 }  // namespace internal
 }  // namespace simdjson
-}  // namespace safetensors
+}  // namesapce minijson
 
 #endif
 
@@ -329,6 +354,75 @@ namespace detail {
 
 double from_chars(const char *p);
 const char *my_strchr(const char *p, int ch);
+
+}  // namespace detail
+
+namespace detail {
+
+//
+// Usage:
+//  - set_input()
+//  - scan_string()
+//    - success: use `token_buffer` string
+//    - error: use `error_message`
+//
+struct string_parser {
+  // input string must be UTF-8
+  void set_input(const std::string &s) { _input = s; }
+
+  bool scan_string();
+
+  void reset() {
+    if (_input.size()) {
+      current = _input[0];
+    } else {
+      current = '\0';
+    }
+    curr_idx = 0;
+    token_buffer.clear();
+  }
+
+  // fetch next token.
+  unsigned char get() {
+    if ((curr_idx + 1) < _input.size()) {
+      curr_idx++;
+      current = _input[curr_idx];
+      return current;
+    }
+    current = '\0';
+    return current;
+  }
+
+  bool eof() {
+    if (_input.empty()) {
+      return true;
+    }
+
+    if (curr_idx >= _input.size()) {
+      return true;
+    }
+
+    return false;
+  }
+
+  void add(const unsigned char c) { token_buffer += c; }
+
+  void add(const int i) {
+    // use lower 8bit
+    token_buffer += static_cast<unsigned char>(i & 0xff);
+  }
+
+  int get_codepoint();
+
+  bool next_byte_in_range(const std::initializer_list<int> ranges);
+
+  std::string error_message;
+  std::string token_buffer;  // output
+
+  unsigned char current{'\0'};
+  size_t curr_idx{0};
+  std::string _input;
+};
 
 }  // namespace detail
 
@@ -356,10 +450,8 @@ class value;
 
 typedef bool boolean;
 typedef double number;
-// typedef std::string string;
-
-// For same behavior of Python OrderedDict
-typedef nstd::ordered_dict<value> object;
+typedef std::string string;
+typedef safetensors::ordered_dict<value> object;
 typedef std::vector<value> array;
 typedef struct {
 } null_t;
@@ -385,7 +477,7 @@ struct TypeTraits<number> {
 };
 
 template <>
-struct TypeTraits<std::string> {
+struct TypeTraits<string> {
   static constexpr uint32_t type_id() { return 3; }
 };
 
@@ -475,20 +567,6 @@ class value {
     return false;
   }
 
-#if 0
-  // TODO: type-safe get.
-  template <typename T>
-  T &get() const {
-    if (t == array_type)
-      return *reinterpret_cast<T *>(const_cast<array *>(u.a));
-    if (t == object_type) return *reinterpret_cast<T *>(u.o);
-    if (t == string_type) return *reinterpret_cast<T *>(u.s);
-    if (t == null_type) return *reinterpret_cast<null_t *>(u.n);
-    if (t == boolean_type) return *reinterpret_cast<boolean *>(u.b);
-    return *reinterpret_cast<T *>(const_cast<number *>(&u.d));
-  }
-#endif
-
   template <typename T>
   const T *as() const {
     if ((t == array_type) &&
@@ -524,36 +602,40 @@ class value {
     return nullptr;
   }
 
-#if 0
   template <typename T>
-  T *as() const {
-    if ((t == array_type) && (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
-      return reinterpret_cast<T *>(const_cast<array *>(u.a));
+  T *as() {
+    if ((t == array_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<array>::type_id())) {
+      return reinterpret_cast<T *>(u.a);
     }
 
-    if ((t == object_type) && (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
+    if ((t == object_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<object>::type_id())) {
       return reinterpret_cast<T *>(u.o);
     }
 
-    if ((t == string_type) && (TypeTraits<T>::type_id() == TypeTraits<string>::type_id())) {
+    if ((t == string_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<string>::type_id())) {
       return reinterpret_cast<T *>(u.s);
     }
 
-    if ((t == null_type) && (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
+    if ((t == null_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<null_t>::type_id())) {
       return reinterpret_cast<T *>(&u.n);
     }
 
-    if ((t == boolean_type) && (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
+    if ((t == boolean_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<boolean>::type_id())) {
       return reinterpret_cast<T *>(&u.b);
     }
 
-    if ((t == number_type) && (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
+    if ((t == number_type) &&
+        (TypeTraits<T>::type_id() == TypeTraits<number>::type_id())) {
       return reinterpret_cast<T *>(&u.d);
     }
 
     return nullptr;
   }
-#endif
 
   null_t &operator=(null_t &n) {
     t = null_type;
@@ -640,14 +722,17 @@ class value {
     std::stringstream ss;
     ss << '"';
     while (*p) {
-      if (*p == '\n') ss << "\\n";
-      if (*p == '\r') ss << "\\r";
-      if (*p == '\t')
+      if (*p == '\n') {
+        ss << "\\n";
+      } else if (*p == '\r') {
+        ss << "\\r";
+      } else if (*p == '\t') {
         ss << "\\t";
-      else if (detail::my_strchr("\"", *p))
+      } else if (detail::my_strchr("\"", *p)) {
         ss << "\\" << *p;
-      else
+      } else {
         ss << *p;
+      }
       p++;
     }
     ss << '"';
@@ -676,12 +761,12 @@ class value {
       }
       ss << "]";
     } else if (auto po = as<object>()) {
-      //object::const_iterator i;
+      // object::const_iterator i;
       ss << "{";
       // object o = get<object>();
       for (size_t i = 0; i < po->size(); i++) {
         if (i > 0) ss << ", ";
-        ss << po->keys()[i];
+        ss << "\"" << po->keys()[i] << "\"";
 
         value v;
         if (po->at(i, &v)) {
@@ -826,6 +911,10 @@ template <typename Iter>
 inline error parse_number(Iter &i, value &v) {
   Iter p = i;
 
+  if (*i == '-') {
+    i++;
+  }
+
 #define MINIJSON_IS_NUM(x) ('0' <= x && x <= '9')
 #define MINIJSON_IS_ALNUM(x) \
   (('0' <= x && x <= '9') || ('a' <= x && x <= 'f') || ('A' <= x && x <= 'F'))
@@ -864,10 +953,12 @@ template <typename Iter>
 inline error parse_string(Iter &i, value &v) {
   if (*i != '"') return invalid_token_error;
 
-  char t = *i++;
+  Iter s = i;
+  char t = *i++;  // = '"'
   Iter p = i;
-  std::stringstream ss;
 
+#if 0
+  std::stringstream ss;
   while (*i && *i != t) {
     if (*i == '\\' && *(i + 1)) {
       i++;
@@ -884,16 +975,54 @@ inline error parse_string(Iter &i, value &v) {
     }
     i++;
   }
+#else
+  // read until '"'
+  while (*i && *i != t) {
+    if (*i == '\\' && *(i + 1)) {
+      i++;
+    }
+    i++;
+  }
+
+#endif
   if (!*i) return invalid_token_error;
   if (i < p) {
     return corrupted_json_error;
   }
+
+#if 0
   v = std::string(p, size_t(i - p));
+
   i++;
   if (*i && nullptr == detail::my_strchr(":,\x7d]\r\n ", *i)) {
     i = p;
     return invalid_token_error;
   }
+
+#else
+
+  i++;
+  if (*i && nullptr == detail::my_strchr(":,\x7d]\r\n ", *i)) {
+    i = p;
+    return invalid_token_error;
+  }
+
+  // include first and last '"' char
+  std::string buf(s, size_t(i - s));
+
+  detail::string_parser str_parser;
+  str_parser.set_input(buf);
+
+  if (!str_parser.scan_string()) {
+    // TODO: error message
+    // str_parser.error_message;
+    return invalid_token_error;
+  } else {
+    v = str_parser.token_buffer;
+  }
+
+#endif
+
   return no_error;
 }
 
@@ -904,7 +1033,7 @@ inline error parse_any(Iter &i, value &v) {
   if (*i == '[') return parse_array(i, v);
   if (*i == 't' || *i == 'f') return parse_boolean(i, v);
   if (*i == 'n') return parse_null(i, v);
-  if ('0' <= *i && *i <= '9') return parse_number(i, v);
+  if ((*i == '-') || ('0' <= *i && *i <= '9')) return parse_number(i, v);
   if (*i == '"') return parse_string(i, v);
   return invalid_token_error;
 }
@@ -958,13 +1087,739 @@ inline const char *errstr(error e) {
 #if defined(MINIJSON_IMPLEMENTATION)
 
 namespace minijson {
+
+namespace detail {
+
+// clang-format off
+//
+// From json.hpp ---------------------------------------------------------
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.11.3
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+#if 1
+    #define JSON_HEDLEY_UNLIKELY(cond) (cond)
+    #define JSON_HEDLEY_LIKELY(cond) (cond)
+
+    /*!
+    @brief get codepoint from 4 hex characters following `\u`
+
+    For input "\u c1 c2 c3 c4" the codepoint is:
+      (c1 * 0x1000) + (c2 * 0x0100) + (c3 * 0x0010) + c4
+    = (c1 << 12) + (c2 << 8) + (c3 << 4) + (c4 << 0)
+
+    Furthermore, the possible characters '0'..'9', 'A'..'F', and 'a'..'f'
+    must be converted to the integers 0x0..0x9, 0xA..0xF, 0xA..0xF, resp. The
+    conversion is done by subtracting the offset (0x30, 0x37, and 0x57)
+    between the ASCII value of the character and the desired integer value.
+
+    @return codepoint (0x0000..0xFFFF) or -1 in case of an error (e.g. EOF or
+            non-hex character)
+    */
+    int string_parser::get_codepoint() 
+    {
+        // this function only makes sense after reading `\u`
+        //JSON_ASSERT(current == 'u');
+        if (current != 'u') {
+          return -1;
+        }
+        int codepoint = 0;
+
+        const auto factors = { 12u, 8u, 4u, 0u };
+        for (const auto factor : factors)
+        {
+            get();
+
+            if (current >= '0' && current <= '9')
+            {
+                codepoint += static_cast<int>((static_cast<unsigned int>(current) - 0x30u) << factor);
+            }
+            else if (current >= 'A' && current <= 'F')
+            {
+                codepoint += static_cast<int>((static_cast<unsigned int>(current) - 0x37u) << factor);
+            }
+            else if (current >= 'a' && current <= 'f')
+            {
+                codepoint += static_cast<int>((static_cast<unsigned int>(current) - 0x57u) << factor);
+            }
+            else
+            {
+                return -1;
+            }
+        }
+
+        if (0x0000 <= codepoint && codepoint <= 0xFFFF) {
+        } else {
+          return -1;
+        }
+        return codepoint;
+    }
+
+    /*!
+    @brief check if the next byte(s) are inside a given range
+
+    Adds the current byte and, for each passed range, reads a new byte and
+    checks if it is inside the range. If a violation was detected, set up an
+    error message and return false. Otherwise, return true.
+
+    @param[in] ranges  list of integers; interpreted as list of pairs of
+                       inclusive lower and upper bound, respectively
+
+    @pre The passed list @a ranges must have 2, 4, or 6 elements; that is,
+         1, 2, or 3 pairs. This precondition is enforced by an assertion.
+
+    @return true if and only if no range violation was detected
+    */
+    bool string_parser::next_byte_in_range(const std::initializer_list<int> ranges)
+    {
+        if (ranges.size() == 2 || ranges.size() == 4 || ranges.size() == 6) {
+        } else {
+          return false;
+        }
+
+        add(current);
+
+        for (auto range = ranges.begin(); range != ranges.end(); ++range)
+        {
+            get();
+            if (JSON_HEDLEY_LIKELY(*range <= current && current <= *(++range))) // NOLINT(bugprone-inc-dec-in-conditions)
+            {
+                add(current);
+            }
+            else
+            {
+                error_message = "invalid string: ill-formed UTF-8 byte";
+                return false;
+            }
+        }
+
+        return true;
+    }
+    /*!
+    @brief scan a string literal
+
+    This function scans a string according to Sect. 7 of RFC 8259. While
+    scanning, bytes are escaped and copied into buffer token_buffer. Then the
+    function returns successfully, token_buffer is *not* null-terminated (as it
+    may contain \0 bytes), and token_buffer.size() is the number of bytes in the
+    string.
+
+    @return true if string could be successfully scanned,
+            false otherwise
+
+    @note In case of errors, variable error_message contains a textual
+          description.
+    */
+    bool string_parser::scan_string()
+    {
+        // reset token_buffer (ignore opening quote)
+        reset();
+
+        // we entered the function by reading an open quote
+        //JSON_ASSERT(current == '\"');
+        if (current != '\"') {
+            error_message = "first character must be '\"'";
+            return false;
+        }
+
+
+        while (!eof())
+        {
+
+            // get next character
+            switch (get())
+            {
+
+                // closing quote
+                case '\"':
+                {
+                    return true;
+                }
+
+                // escapes
+                case '\\':
+                {
+                    switch (get())
+                    {
+                        // quotation mark
+                        case '\"':
+                            add('\"');
+                            break;
+                        // reverse solidus
+                        case '\\':
+                            add('\\');
+                            break;
+                        // solidus
+                        case '/':
+                            add('/');
+                            break;
+                        // backspace
+                        case 'b':
+                            add('\b');
+                            break;
+                        // form feed
+                        case 'f':
+                            add('\f');
+                            break;
+                        // line feed
+                        case 'n':
+                            add('\n');
+                            break;
+                        // carriage return
+                        case 'r':
+                            add('\r');
+                            break;
+                        // tab
+                        case 't':
+                            add('\t');
+                            break;
+
+                        // unicode escapes
+                        case 'u':
+                        {
+                            const int codepoint1 = get_codepoint();
+                            int codepoint = codepoint1; // start with codepoint1
+
+                            if (JSON_HEDLEY_UNLIKELY(codepoint1 == -1))
+                            {
+                                error_message = "invalid string: '\\u' must be followed by 4 hex digits";
+                                return false;
+                            }
+
+                            // check if code point is a high surrogate
+                            if (0xD800 <= codepoint1 && codepoint1 <= 0xDBFF)
+                            {
+                                // expect next \uxxxx entry
+                                if (JSON_HEDLEY_LIKELY(get() == '\\' && get() == 'u'))
+                                {
+                                    const int codepoint2 = get_codepoint();
+
+                                    if (JSON_HEDLEY_UNLIKELY(codepoint2 == -1))
+                                    {
+                                        error_message = "invalid string: '\\u' must be followed by 4 hex digits";
+                                        return false;
+                                    }
+
+                                    // check if codepoint2 is a low surrogate
+                                    if (JSON_HEDLEY_LIKELY(0xDC00 <= codepoint2 && codepoint2 <= 0xDFFF))
+                                    {
+                                        // overwrite codepoint
+                                        codepoint = static_cast<int>(
+                                                        // high surrogate occupies the most significant 22 bits
+                                                        (static_cast<unsigned int>(codepoint1) << 10u)
+                                                        // low surrogate occupies the least significant 15 bits
+                                                        + static_cast<unsigned int>(codepoint2)
+                                                        // there is still the 0xD800, 0xDC00 and 0x10000 noise
+                                                        // in the result, so we have to subtract with:
+                                                        // (0xD800 << 10) + DC00 - 0x10000 = 0x35FDC00
+                                                        - 0x35FDC00u);
+                                    }
+                                    else
+                                    {
+                                        error_message = "invalid string: surrogate U+D800..U+DBFF must be followed by U+DC00..U+DFFF";
+                                        return false;
+                                    }
+                                }
+                                else
+                                {
+                                    error_message = "invalid string: surrogate U+D800..U+DBFF must be followed by U+DC00..U+DFFF";
+                                    return false;
+                                }
+                            }
+                            else
+                            {
+                                if (JSON_HEDLEY_UNLIKELY(0xDC00 <= codepoint1 && codepoint1 <= 0xDFFF))
+                                {
+                                    error_message = "invalid string: surrogate U+DC00..U+DFFF must follow U+D800..U+DBFF";
+                                    return false;
+                                }
+                            }
+
+                            // result of the above calculation yields a proper codepoint
+                            //JSON_ASSERT(0x00 <= codepoint && codepoint <= 0x10FFFF);
+                            if (0x00 <= codepoint && codepoint <= 0x10FFFF) {
+                            } else {
+                                error_message = "invalid string: invalid codepoint";
+                                return false;
+                            }
+
+                            // translate codepoint into bytes
+                            if (codepoint < 0x80)
+                            {
+                                // 1-byte characters: 0xxxxxxx (ASCII)
+                                add(static_cast<int>(codepoint));
+                            }
+                            else if (codepoint <= 0x7FF)
+                            {
+                                // 2-byte characters: 110xxxxx 10xxxxxx
+                                add(static_cast<int>(0xC0u | (static_cast<unsigned int>(codepoint) >> 6u)));
+                                add(static_cast<int>(0x80u | (static_cast<unsigned int>(codepoint) & 0x3Fu)));
+                            }
+                            else if (codepoint <= 0xFFFF)
+                            {
+                                // 3-byte characters: 1110xxxx 10xxxxxx 10xxxxxx
+                                add(static_cast<int>(0xE0u | (static_cast<unsigned int>(codepoint) >> 12u)));
+                                add(static_cast<int>(0x80u | ((static_cast<unsigned int>(codepoint) >> 6u) & 0x3Fu)));
+                                add(static_cast<int>(0x80u | (static_cast<unsigned int>(codepoint) & 0x3Fu)));
+                            }
+                            else
+                            {
+                                // 4-byte characters: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+                                add(static_cast<int>(0xF0u | (static_cast<unsigned int>(codepoint) >> 18u)));
+                                add(static_cast<int>(0x80u | ((static_cast<unsigned int>(codepoint) >> 12u) & 0x3Fu)));
+                                add(static_cast<int>(0x80u | ((static_cast<unsigned int>(codepoint) >> 6u) & 0x3Fu)));
+                                add(static_cast<int>(0x80u | (static_cast<unsigned int>(codepoint) & 0x3Fu)));
+                            }
+
+                            break;
+                        }
+
+                        // other characters after escape
+                        default:
+                            error_message = "invalid string: forbidden character after backslash";
+                            return false;
+                    }
+
+                    break;
+                }
+
+                // invalid control characters
+                case 0x00:
+                {
+                    error_message = "invalid string: control character U+0000 (NUL) must be escaped to \\u0000";
+                    return false;
+                }
+
+                case 0x01:
+                {
+                    error_message = "invalid string: control character U+0001 (SOH) must be escaped to \\u0001";
+                    return false;
+                }
+
+                case 0x02:
+                {
+                    error_message = "invalid string: control character U+0002 (STX) must be escaped to \\u0002";
+                    return false;
+                }
+
+                case 0x03:
+                {
+                    error_message = "invalid string: control character U+0003 (ETX) must be escaped to \\u0003";
+                    return false;
+                }
+
+                case 0x04:
+                {
+                    error_message = "invalid string: control character U+0004 (EOT) must be escaped to \\u0004";
+                    return false;
+                }
+
+                case 0x05:
+                {
+                    error_message = "invalid string: control character U+0005 (ENQ) must be escaped to \\u0005";
+                    return false;
+                }
+
+                case 0x06:
+                {
+                    error_message = "invalid string: control character U+0006 (ACK) must be escaped to \\u0006";
+                    return false;
+                }
+
+                case 0x07:
+                {
+                    error_message = "invalid string: control character U+0007 (BEL) must be escaped to \\u0007";
+                    return false;
+                }
+
+                case 0x08:
+                {
+                    error_message = "invalid string: control character U+0008 (BS) must be escaped to \\u0008 or \\b";
+                    return false;
+                }
+
+                case 0x09:
+                {
+                    error_message = "invalid string: control character U+0009 (HT) must be escaped to \\u0009 or \\t";
+                    return false;
+                }
+
+                case 0x0A:
+                {
+                    error_message = "invalid string: control character U+000A (LF) must be escaped to \\u000A or \\n";
+                    return false;
+                }
+
+                case 0x0B:
+                {
+                    error_message = "invalid string: control character U+000B (VT) must be escaped to \\u000B";
+                    return false;
+                }
+
+                case 0x0C:
+                {
+                    error_message = "invalid string: control character U+000C (FF) must be escaped to \\u000C or \\f";
+                    return false;
+                }
+
+                case 0x0D:
+                {
+                    error_message = "invalid string: control character U+000D (CR) must be escaped to \\u000D or \\r";
+                    return false;
+                }
+
+                case 0x0E:
+                {
+                    error_message = "invalid string: control character U+000E (SO) must be escaped to \\u000E";
+                    return false;
+                }
+
+                case 0x0F:
+                {
+                    error_message = "invalid string: control character U+000F (SI) must be escaped to \\u000F";
+                    return false;
+                }
+
+                case 0x10:
+                {
+                    error_message = "invalid string: control character U+0010 (DLE) must be escaped to \\u0010";
+                    return false;
+                }
+
+                case 0x11:
+                {
+                    error_message = "invalid string: control character U+0011 (DC1) must be escaped to \\u0011";
+                    return false;
+                }
+
+                case 0x12:
+                {
+                    error_message = "invalid string: control character U+0012 (DC2) must be escaped to \\u0012";
+                    return false;
+                }
+
+                case 0x13:
+                {
+                    error_message = "invalid string: control character U+0013 (DC3) must be escaped to \\u0013";
+                    return false;
+                }
+
+                case 0x14:
+                {
+                    error_message = "invalid string: control character U+0014 (DC4) must be escaped to \\u0014";
+                    return false;
+                }
+
+                case 0x15:
+                {
+                    error_message = "invalid string: control character U+0015 (NAK) must be escaped to \\u0015";
+                    return false;
+                }
+
+                case 0x16:
+                {
+                    error_message = "invalid string: control character U+0016 (SYN) must be escaped to \\u0016";
+                    return false;
+                }
+
+                case 0x17:
+                {
+                    error_message = "invalid string: control character U+0017 (ETB) must be escaped to \\u0017";
+                    return false;
+                }
+
+                case 0x18:
+                {
+                    error_message = "invalid string: control character U+0018 (CAN) must be escaped to \\u0018";
+                    return false;
+                }
+
+                case 0x19:
+                {
+                    error_message = "invalid string: control character U+0019 (EM) must be escaped to \\u0019";
+                    return false;
+                }
+
+                case 0x1A:
+                {
+                    error_message = "invalid string: control character U+001A (SUB) must be escaped to \\u001A";
+                    return false;
+                }
+
+                case 0x1B:
+                {
+                    error_message = "invalid string: control character U+001B (ESC) must be escaped to \\u001B";
+                    return false;
+                }
+
+                case 0x1C:
+                {
+                    error_message = "invalid string: control character U+001C (FS) must be escaped to \\u001C";
+                    return false;
+                }
+
+                case 0x1D:
+                {
+                    error_message = "invalid string: control character U+001D (GS) must be escaped to \\u001D";
+                    return false;
+                }
+
+                case 0x1E:
+                {
+                    error_message = "invalid string: control character U+001E (RS) must be escaped to \\u001E";
+                    return false;
+                }
+
+                case 0x1F:
+                {
+                    error_message = "invalid string: control character U+001F (US) must be escaped to \\u001F";
+                    return false;
+                }
+
+                // U+0020..U+007F (except U+0022 (quote) and U+005C (backspace))
+                case 0x20:
+                case 0x21:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2A:
+                case 0x2B:
+                case 0x2C:
+                case 0x2D:
+                case 0x2E:
+                case 0x2F:
+                case 0x30:
+                case 0x31:
+                case 0x32:
+                case 0x33:
+                case 0x34:
+                case 0x35:
+                case 0x36:
+                case 0x37:
+                case 0x38:
+                case 0x39:
+                case 0x3A:
+                case 0x3B:
+                case 0x3C:
+                case 0x3D:
+                case 0x3E:
+                case 0x3F:
+                case 0x40:
+                case 0x41:
+                case 0x42:
+                case 0x43:
+                case 0x44:
+                case 0x45:
+                case 0x46:
+                case 0x47:
+                case 0x48:
+                case 0x49:
+                case 0x4A:
+                case 0x4B:
+                case 0x4C:
+                case 0x4D:
+                case 0x4E:
+                case 0x4F:
+                case 0x50:
+                case 0x51:
+                case 0x52:
+                case 0x53:
+                case 0x54:
+                case 0x55:
+                case 0x56:
+                case 0x57:
+                case 0x58:
+                case 0x59:
+                case 0x5A:
+                case 0x5B:
+                case 0x5D:
+                case 0x5E:
+                case 0x5F:
+                case 0x60:
+                case 0x61:
+                case 0x62:
+                case 0x63:
+                case 0x64:
+                case 0x65:
+                case 0x66:
+                case 0x67:
+                case 0x68:
+                case 0x69:
+                case 0x6A:
+                case 0x6B:
+                case 0x6C:
+                case 0x6D:
+                case 0x6E:
+                case 0x6F:
+                case 0x70:
+                case 0x71:
+                case 0x72:
+                case 0x73:
+                case 0x74:
+                case 0x75:
+                case 0x76:
+                case 0x77:
+                case 0x78:
+                case 0x79:
+                case 0x7A:
+                case 0x7B:
+                case 0x7C:
+                case 0x7D:
+                case 0x7E:
+                case 0x7F:
+                {
+                    add(current);
+                    break;
+                }
+
+                // U+0080..U+07FF: bytes C2..DF 80..BF
+                case 0xC2:
+                case 0xC3:
+                case 0xC4:
+                case 0xC5:
+                case 0xC6:
+                case 0xC7:
+                case 0xC8:
+                case 0xC9:
+                case 0xCA:
+                case 0xCB:
+                case 0xCC:
+                case 0xCD:
+                case 0xCE:
+                case 0xCF:
+                case 0xD0:
+                case 0xD1:
+                case 0xD2:
+                case 0xD3:
+                case 0xD4:
+                case 0xD5:
+                case 0xD6:
+                case 0xD7:
+                case 0xD8:
+                case 0xD9:
+                case 0xDA:
+                case 0xDB:
+                case 0xDC:
+                case 0xDD:
+                case 0xDE:
+                case 0xDF:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!next_byte_in_range({0x80, 0xBF})))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+0800..U+0FFF: bytes E0 A0..BF 80..BF
+                case 0xE0:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0xA0, 0xBF, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+1000..U+CFFF: bytes E1..EC 80..BF 80..BF
+                // U+E000..U+FFFF: bytes EE..EF 80..BF 80..BF
+                case 0xE1:
+                case 0xE2:
+                case 0xE3:
+                case 0xE4:
+                case 0xE5:
+                case 0xE6:
+                case 0xE7:
+                case 0xE8:
+                case 0xE9:
+                case 0xEA:
+                case 0xEB:
+                case 0xEC:
+                case 0xEE:
+                case 0xEF:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0x80, 0xBF, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+D000..U+D7FF: bytes ED 80..9F 80..BF
+                case 0xED:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0x80, 0x9F, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+10000..U+3FFFF F0 90..BF 80..BF 80..BF
+                case 0xF0:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0x90, 0xBF, 0x80, 0xBF, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+40000..U+FFFFF F1..F3 80..BF 80..BF 80..BF
+                case 0xF1:
+                case 0xF2:
+                case 0xF3:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0x80, 0xBF, 0x80, 0xBF, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // U+100000..U+10FFFF F4 80..8F 80..BF 80..BF
+                case 0xF4:
+                {
+                    if (JSON_HEDLEY_UNLIKELY(!(next_byte_in_range({0x80, 0x8F, 0x80, 0xBF, 0x80, 0xBF}))))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+
+                // remaining bytes (80..C1 and F5..FF) are ill-formed
+                default:
+                {
+                    error_message = "invalid string: ill-formed UTF-8 byte";
+                    return false;
+                }
+            }
+        }
+
+        error_message = "invalid string: missing closing quote";
+        return false;
+    }
+#endif
+// end json.hpp
+// clang-format on
+
+}  // namespace detail
+
 namespace detail {
 
 double from_chars(const char *p) {
 #if defined(MINIJSON_USE_STRTOD)
   return strtod(p, nullptr);
 #else
-  return safetensors::simdjson::internal::from_chars(p);
+  return simdjson::internal::from_chars(p);
 #endif
 }
 
@@ -998,7 +1853,7 @@ const char *my_strchr(const char *p, int ch) {
 #include <cstring>
 #include <limits>
 
-namespace safetensors {
+namespace minijson {
 namespace simdjson {
 namespace internal {
 
@@ -1611,9 +2466,9 @@ double from_chars(const char *first, const char *end) noexcept {
 
 }  // namespace internal
 }  // namespace simdjson
-}  // namespace safetensors
+}  // namespace minijson
 
-namespace safetensors {
+namespace minijson {
 namespace simdjson {
 namespace internal {
 /*!
@@ -2562,13 +3417,12 @@ char *to_chars(char *first, const char *last, double value) {
 }
 }  // namespace internal
 }  // namespace simdjson
-}  // namespace safetensors
+}  // namespace minijson
 
 #endif  // !MINIJSON_USE_STRTOD
 
 #endif  // MINIJSON_IMPLEMENTATION
 
-#endif /* minijson_h */
 
 namespace safetensors {
 
@@ -2695,11 +3549,11 @@ bool ReadWholeFile(std::vector<unsigned char> *out, std::string *err,
 #endif
 }
 
-bool parse_metadata(const minijson::value &v,
-                    nstd::ordered_dict<std::string> &dst, std::string *err) {
-  if (auto po = v.as<minijson::object>()) {
+bool parse_metadata(const ::minijson::value &v,
+                    ordered_dict<std::string> &dst, std::string *err) {
+  if (auto po = v.as<::minijson::object>()) {
     for (size_t i = 0; i < po->size(); i++) {
-      minijson::value ov;
+      ::minijson::value ov;
       if (!po->at(i, &ov)) {
           if (err) {
             (*err) +=
@@ -2736,7 +3590,7 @@ bool parse_metadata(const minijson::value &v,
   return true;
 }
 
-bool parse_dtype(const minijson::value &v, safetensors::dtype &dtype,
+bool parse_dtype(const ::minijson::value &v, safetensors::dtype &dtype,
                  std::string *err) {
   if (auto so = v.as<std::string>()) {
     if ((*so) == "BOOL") {
@@ -2782,16 +3636,16 @@ bool parse_dtype(const minijson::value &v, safetensors::dtype &dtype,
   return true;
 }
 
-bool parse_shape(const minijson::value &v, std::vector<size_t> &dst,
+bool parse_shape(const ::minijson::value &v, std::vector<size_t> &dst,
                  std::string *err) {
   // NOTE:
   // - Empty tensors (tensors with 1 dimension being 0) are allowed
   // - [] is allowed(0-Rank tensor = merely a scalar)
-  if (auto pa = v.as<minijson::array>()) {
-    minijson::array::const_iterator i;
+  if (auto pa = v.as<::minijson::array>()) {
+    ::minijson::array::const_iterator i;
 
     for (i = pa->begin(); i != pa->end(); i++) {
-      if (auto pn = i->as<minijson::number>()) {
+      if (auto pn = i->as<::minijson::number>()) {
         if (dst.size() >= kMaxDim) {
           if (err) {
             (*err) += "`shape` length must be less than " +
@@ -2822,14 +3676,14 @@ bool parse_shape(const minijson::value &v, std::vector<size_t> &dst,
   return true;
 }
 
-bool parse_data_offsets(const minijson::value &v, std::array<size_t, 2> &dst,
+bool parse_data_offsets(const ::minijson::value &v, std::array<size_t, 2> &dst,
                         std::string *err) {
-  if (auto pa = v.as<minijson::array>()) {
-    minijson::array::const_iterator i;
+  if (auto pa = v.as<::minijson::array>()) {
+    ::minijson::array::const_iterator i;
     size_t cnt = 0;
 
     for (i = pa->begin(); i != pa->end(); i++) {
-      if (auto pn = i->as<minijson::number>()) {
+      if (auto pn = i->as<::minijson::number>()) {
         if (cnt >= 2) {
           if (err) {
             (*err) += "`data_offsets` length must be 2.\n";
@@ -2868,9 +3722,9 @@ bool parse_data_offsets(const minijson::value &v, std::array<size_t, 2> &dst,
   return true;
 }
 
-bool parse_tensor(const std::string &name, const minijson::value &v,
+bool parse_tensor(const std::string &name, const ::minijson::value &v,
                   tensor_t &tensor, std::string *err) {
-  if (auto po = v.as<minijson::object>()) {
+  if (auto po = v.as<::minijson::object>()) {
 
     bool dtype_found{false};
     bool shape_found{false};
@@ -2884,7 +3738,7 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
       std::string key = po->keys()[i];
 
       if (key == "dtype") {
-        minijson::value value;
+        ::minijson::value value;
         if (!po->at(i, &value)) {
           if (err) {
             (*err) += "Internal error. `dtype` has invalid object.\n";
@@ -2898,7 +3752,7 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
 
         dtype_found = true;
       } else if (key == "shape") {
-        minijson::value value;
+        ::minijson::value value;
         if (!po->at(i, &value)) {
           if (err) {
             (*err) += "Internal error. `shape` has invalid object.\n";
@@ -2912,7 +3766,7 @@ bool parse_tensor(const std::string &name, const minijson::value &v,
 
         shape_found = true;
       } else if (key == "data_offsets") {
-        minijson::value value;
+        ::minijson::value value;
         if (!po->at(i, &value)) {
           if (err) {
             (*err) += "Internal error. `data_offsets` has invalid object.\n";
@@ -3440,28 +4294,28 @@ bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
   std::string json_str(reinterpret_cast<const char *>(&addr[8]), header_size);
   const char *p = json_str.c_str();
 
-  minijson::value v;
-  minijson::error e = minijson::parse(p, v);
+  ::minijson::value v;
+  ::minijson::error e = ::minijson::parse(p, v);
 
-  if (e != minijson::no_error) {
+  if (e != ::minijson::no_error) {
     if (err) {
-      std::string json_err(minijson::errstr(e));
+      std::string json_err(::minijson::errstr(e));
       (*err) += "JSON parse error: " + json_err + "\n";
     }
 
     return false;
   }
 
-  nstd::ordered_dict<tensor_t> tensors;
-  nstd::ordered_dict<std::string> metadata;
+  ordered_dict<tensor_t> tensors;
+  ordered_dict<std::string> metadata;
 
   // root element must be dict.
-  if (auto po = v.as<minijson::object>()) {
+  if (auto po = v.as<::minijson::object>()) {
     for (size_t i = 0; i < po->size(); i++) {
       std::string key = po->keys()[i];
 
       if (key == "__metadata__") {
-        minijson::value value;
+        ::minijson::value value;
         if (!po->at(i, &value)) {
           if (err) {
             (*err) += "Internal error. Invalid object in __metadata__.\n";
@@ -3482,7 +4336,7 @@ bool parse_safetensors_header(const uint8_t *addr, const size_t nbytes,
           return false;
         }
 
-        minijson::value value;
+        ::minijson::value value;
         if (!po->at(i, &value)) {
           if (err) {
             (*err) += "Internal error. Invalid object in `" + key + "`.\n";
@@ -3952,8 +4806,8 @@ bool save_to_memory(const safetensors_t &st, std::vector<uint8_t> *dst,
   if ((header_size % 8) != 0) {
     pad_bytes = 8 - (header_size % 8);
   }
-  printf("header_size = %d\n", int(header_size));
-  printf("pad_bytes = %d\n", int(pad_bytes));
+  //printf("header_size = %d\n", int(header_size));
+  //printf("pad_bytes = %d\n", int(pad_bytes));
   size_t padded_header_size = header_size + pad_bytes;
   dst->resize(8 + padded_header_size + databuffer_size);
 

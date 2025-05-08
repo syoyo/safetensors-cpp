@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
 
   // __metadata__
   {
-    st.metadata.insert("creater", "safetensors-cpp");
+    st.metadata.insert("creator", "safetensors-cpp");
   }
 
   std::string filename = "example.safetensors";
